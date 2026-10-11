@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wufour Maps</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body { display: grid; place-items: center; font: 24px system-ui, sans-serif; background: #fff; color: #111; }
+    @media (prefers-color-scheme: dark) { body { background: #000; color: #f2f2f2; } }
+  </style>
+</head>
+<body>
+  <script type="module">
+    import { start } from './zui.js';
+    start('./app.wasm');
+  </script>
+</body>
+</html>

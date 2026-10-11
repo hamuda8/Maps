@@ -1,0 +1,18 @@
+.{
+    .name = .maps,
+    .version = "0.0.1",
+    .fingerprint = 0x472e08a5f89baf49, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .zig_core = .{
+            .url = "git+https://github.com/hamuda8/zig-core#7ee007ab43b98fae3c2b7abd4b3f17449d9a92bc",
+            .hash = "zig_core-0.0.1-OzygwvgCAQBImliXzCLiqn9dQYpdzP4YxmnRXtYNhJpU",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "shells",
+    },
+}
