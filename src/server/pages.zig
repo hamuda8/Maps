@@ -219,7 +219,9 @@ pub fn logout(ctx: *http.Context) !void {
 
 /// GET /developers: the console page with the signed-in user (or null) injected.
 pub fn developers(ctx: *http.Context) !void {
-    var html = publicFile(ctx, "markup/developers.html") catch return ctx.text(.internal_server_error, "Internal Server Error");
+    // The zui console (developers.html of the web build), else Maps-js's page.
+    var html = publicFile(ctx, "developers.html") catch publicFile(ctx, "markup/developers.html") catch return ctx.text(.internal_server_error, "Internal Server Error");
+    try ctx.setHeader("cache-control", "no-cache");
     var injected: ?struct { userId: ?[]const u8, username: ?[]const u8, role: []const u8 } = null;
     if (tokenOf(ctx)) |token| {
         if (verify(ctx.arena, token)) |u| {
@@ -240,6 +242,13 @@ pub fn developers(ctx: *http.Context) !void {
 // ---- Developer console API ----------------------------------------------------------------
 
 /// GET /api/developer/keys: the user's active keys with today's and 30 days' usage.
+/// GET /api/developer/me: the signed-in Wufour user, or null.
+pub fn me(ctx: *http.Context) !void {
+    try ctx.setHeader("cache-control", "no-store");
+    const u = currentUser(ctx) orelse return ctx.sendJson(.ok, .{ .success = true, .user = @as(?u8, null) });
+    return ctx.sendJson(.ok, .{ .success = true, .user = .{ .username = u.username orelse u.email, .role = u.role } });
+}
+
 pub fn listKeys(ctx: *http.Context) !void {
     const user = currentUser(ctx) orelse return a_.fail(ctx, .unauthorized, "Not authenticated");
     const user_id = user.userId orelse return a_.fail(ctx, .unauthorized, "Not authenticated");

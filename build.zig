@@ -16,7 +16,11 @@ pub fn build(b: *std.Build) void {
         .android_manifest = b.path("shells/android/AndroidManifest.xml"),
         .ios_info_plist = b.path("shells/ios/Info.plist"),
         // The map of the JS library other sites load (/sdk/wufour-maps.js).
-        .web_extra = &.{.{ .name = "sdk", .root = b.path("src/sdk/sdk.zig") }},
+        .web_extra = &.{
+            .{ .name = "sdk", .root = b.path("src/sdk/sdk.zig") },
+            // The developer console (/developers): API keys and embed snippets.
+            .{ .name = "developers", .root = b.path("src/developers/developers.zig") },
+        },
         .optimize = b.standardOptimizeOption(.{}),
     });
 }

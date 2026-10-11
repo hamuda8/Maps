@@ -65,6 +65,7 @@ pub fn main(init: std.process.Init) !void {
     try router.get("/api/v1/route", routing.routeV1);
     try router.get("/api/v1/search", search.search);
     try router.get("/api/v1/reverse", search.reverse);
+    try router.get("/api/developer/me", pages.me);
     try router.get("/api/developer/keys", pages.listKeys);
     try router.post("/api/developer/keys/create", pages.createKey);
     try router.post("/api/developer/keys/revoke", pages.revokeKey);
