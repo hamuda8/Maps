@@ -1,0 +1,35 @@
+/* Wufour Maps JS library styles. The map's colouring is the engine's own (as the Maps app). */
+.wufour-map { overflow: hidden; }
+.wufour-map-engine { position: absolute; inset: 0; }
+/* HTML markers, tooltips, popups and controls float over the map; the map gets every other touch. */
+.wufour-map-overlay { position: absolute; inset: 0; pointer-events: none; }
+.wufour-map-overlay > * { pointer-events: auto; position: absolute; left: 0; top: 0; }
+
+.wufour-marker { cursor: pointer; will-change: transform; }
+.wufour-marker > * { pointer-events: none; }
+
+.wufour-ctrl {
+    left: auto; top: auto; right: 10px; bottom: 30px;
+    display: flex; flex-direction: column;
+    background: #fff; border-radius: 4px; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1); overflow: hidden;
+}
+.wufour-ctrl button {
+    width: 29px; height: 29px; border: 0; padding: 0; margin: 0; background: transparent;
+    font: 700 18px/29px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #333; cursor: pointer;
+}
+.wufour-ctrl button + button { border-top: 1px solid #ddd; }
+.wufour-ctrl button:hover { background: rgba(0, 0, 0, 0.05); }
+
+.wufour-bubble { pointer-events: none; z-index: 2; }
+.wufour-bubble .maplibregl-popup-content {
+    position: relative;
+    background: #fff;
+    font-family: inherit;
+    color: #0f172a;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.wufour-popup { pointer-events: auto; }
+.wufour-tooltip .maplibregl-popup-content { padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+.wufour-popup .maplibregl-popup-content { padding: 10px 14px; font-size: 14px; }

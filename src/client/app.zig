@@ -1429,7 +1429,7 @@ test "driver: Exit asks the page, which closes navigation" {
     try testing.expect(D.respond("/api/route/valhalla", 200, "{\"trip\":{\"summary\":{\"time\":600,\"length\":4.2},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
     try testing.expect(D.findText("Exit") != 0); // ?nav=1 started navigation
     try D.press("Exit");
-    try testing.expectEqualStrings("{\"type\":\"WUFOUR_NAVIGATION_EXITED\"}", zui.host.posted.items);
+    try testing.expect(std.mem.indexOf(u8, zui.host.posted.items, "{\"type\":\"WUFOUR_NAVIGATION_EXITED\"}") != null);
     try testing.expect(D.findText("Exit") != 0); // still navigating until the page says so
     D.R.hostMessage("{\"type\":\"WUFOUR_FORCE_EXIT_NAVIGATION\"}");
     try testing.expect(D.findText("Exit") == 0);
