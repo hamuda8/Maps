@@ -112,6 +112,15 @@ pub const Upstream = struct {
 
 /// GET (or POST with a JSON body) to another service. Errors when it cannot be reached.
 pub fn upstream(arena: std.mem.Allocator, method: std.http.Method, url: []const u8, json_body: ?[]const u8, headers: []const std.http.Header) !Upstream {
+    // A pooled connection the other side closed while idle fails at once: try again on a new
+    // one. Every call here only reads (tiles, routes, places, token checks), so repeating is safe.
+    return upstreamOnce(arena, method, url, json_body, headers) catch |e| switch (e) {
+        error.OutOfMemory => e,
+        else => upstreamOnce(arena, method, url, json_body, headers),
+    };
+}
+
+fn upstreamOnce(arena: std.mem.Allocator, method: std.http.Method, url: []const u8, json_body: ?[]const u8, headers: []const std.http.Header) !Upstream {
     var req = try app.client.request(method, try std.Uri.parse(url), .{
         .extra_headers = headers,
         .redirect_behavior = .unhandled,

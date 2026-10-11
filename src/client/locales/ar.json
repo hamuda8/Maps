@@ -29,5 +29,8 @@
   "{h} hr {m} min": "{h} س {m} د",
   "{n} km": "{n} كم",
   "({n} km)": "({n} كم)",
-  "{n} m": "{n} م"
+  "{n} m": "{n} م",
+  "Loading location...": "جارٍ تحميل الموقع...",
+  "Selected Location": "الموقع المحدد",
+  "Confirm Location": "تأكيد الموقع"
 }

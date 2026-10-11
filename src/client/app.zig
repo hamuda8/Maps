@@ -1,6 +1,11 @@
 //! Wufour Maps client: the same code for the web, Android and iOS. A port of Maps-js's map page
 //! (public/scripts/routing.js): search with suggestions, directions for five ways of travelling,
 //! turn-by-turn navigation with voice, the live position, and pins dropped by tapping the map.
+//!
+//! Embedded in other apps' pages (/embed/<mode>, as Maps-js), it is also:
+//! - picker: choose a place (search, or move the map under a fixed pin), then Confirm;
+//! - driver: Turf's turn-by-turn screen, which reports exit and arrival to the page;
+//! - tracking: a delivery's vehicle moving live along its route.
 
 const std = @import("std");
 const zui = @import("zui");
@@ -30,7 +35,9 @@ const LatLng = geo.LatLng;
 
 const tile_url = api.base ++ "/tiles/{z}/{x}/{y}.png";
 
-const Field = enum(u2) { main, start, dest };
+const Field = enum(u2) { main, start, dest, picker };
+
+const Embed = enum { full, picker, driver, tracking, business };
 
 const key_main = zui.key("main-input");
 const key_start = zui.key("start-input");
@@ -64,6 +71,13 @@ pub const Msg = union(enum) {
     blurred: struct { field: Field, seq: u32 },
     blur_seq: Field,
     search_due: u32,
+    /// The map has stopped moving (picker: name the place under the pin).
+    idle: u32,
+    confirm_place,
+    force_exit,
+    socket: zui.SocketEvent,
+    reconnect,
+    demo_step,
     searched: zui.Response,
     picked: usize,
     picked_location,
@@ -96,8 +110,36 @@ const Nav = struct {
 
 const RouteStatus = enum { none, loading, ok, failed };
 
+const Tracking = struct {
+    id: Text = .{},
+    socket: u32 = 0,
+    opened: bool = false,
+    ended: bool = false,
+    attempts: u32 = 0,
+    vehicle: ?LatLng = null,
+    heading: f64 = 0,
+    mode: api.Mode = .motorcycle,
+    /// The route's first point not yet driven past.
+    passed: usize = 0,
+    demo_index: usize = 0,
+};
+
 pub const State = struct {
     map: map.State,
+    embed: Embed = .full,
+    /// The opening address without the route parameters (path, key, track_id, ...): the
+    /// base of the address the page keeps updated.
+    link_base: [512]u8 = undefined,
+    link_base_len: usize = 0,
+    picker_text: Text = .{},
+    picker_busy: bool = false,
+    /// A place was picked from the list: keep its name rather than naming the map centre.
+    picker_skip: bool = false,
+    picker_located: bool = false,
+    idle_seq: u32 = 0,
+    /// Driver: Exit was pressed; the page decides (it answers with force exit).
+    exit_asked: bool = false,
+    track: Tracking = .{},
     screen: enum { search, routing } = .search,
     mode: api.Mode = .car,
     main: Text = .{},
@@ -146,14 +188,39 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
     const arena = arena_state.allocator();
     switch (msg) {
         .boot => {
-            fx.watchLocation(onLocated);
+            s.embed = embedMode(env.link);
+            setLinkBase(s, env.link);
+            // A tracking page shows someone else's vehicle: it does not need the viewer's position.
+            if (s.embed != .tracking) fx.watchLocation(onLocated);
             restoreFromLink(s, env, fx, arena);
+            switch (s.embed) {
+                .tracking => startTracking(s, env, fx, arena),
+                .picker => s.picker_text.set(t("Loading location...")),
+                else => {},
+            }
         },
-        .frame => _ = s.map.step(env.time_ms),
+        .frame => if (!s.map.step(env.time_ms)) mapStopped(s, fx),
         .map => |p| {
             const g = s.map.handle(p);
-            if (g.tap) |at| tapMap(s, at, env, fx, arena);
+            if (g.tap) |at| if (s.embed == .full or s.embed == .business) tapMap(s, at, env, fx, arena);
+            if (p.kind == .up or p.kind == .cancel or p.kind == .wheel) if (!s.map.moving()) mapStopped(s, fx);
         },
+        .idle => |seq| if (seq == s.idle_seq and s.embed == .picker) {
+            if (s.picker_skip) {
+                s.picker_skip = false;
+                return;
+            }
+            resolvePicker(s, fx, arena);
+        },
+        .confirm_place => {
+            const c = s.map.camera.center;
+            const json = std.fmt.allocPrint(arena, "{{\"type\":\"WUFOUR_LOCATION_SELECTED\",\"lat\":{d},\"lng\":{d},\"address\":{f}}}", .{ c.lat, c.lng, std.json.fmt(s.picker_text.get(), .{}) }) catch return;
+            fx.post(json);
+        },
+        .force_exit => if (s.nav != null) exitNav(s, fx, arena),
+        .socket => |e| trackingEvent(s, e, fx, arena),
+        .reconnect => connectTracking(s, fx, arena),
+        .demo_step => demoStep(s, fx),
         .typed => |e| typed(s, e.field, e.text, fx),
         .focused => |f| {
             s.focused = f;
@@ -203,6 +270,12 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
         .reversed => |r| {
             const which: Field = @enumFromInt(@as(u2, @truncate(r.tag)));
             const name = if (r.ok()) api.parseReverse(arena, r.body) else null;
+            if (which == .picker) {
+                if (r.tag >> 2 != s.reverse_seq) return;
+                s.picker_busy = false;
+                s.picker_text.set(name orelse t("Selected Location"));
+                return;
+            }
             const target = textOf(s, which);
             // Only if the user has not typed something else meanwhile.
             if (std.mem.eql(u8, target.get(), t("Locating pin..."))) target.set(name orelse t("Dropped Pin"));
@@ -236,9 +309,13 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
         },
         .start_nav => startNav(s, fx, arena),
         .exit_nav => {
-            s.nav = null;
-            s.map.easeTo(.{ .pitch = 0, .bearing = 0 }, 1000);
-            drawRoute(s, fx, arena, .{});
+            // In Turf the page decides: it may first ask the driver, then sends force exit.
+            if (s.embed == .driver) {
+                s.exit_asked = true;
+                fx.post("{\"type\":\"WUFOUR_NAVIGATION_EXITED\"}");
+                return;
+            }
+            exitNav(s, fx, arena);
         },
         .recenter => if (s.live) |p| s.map.flyTo(.{ .center = p, .zoom = 16, .pitch = 0 }, 1200),
         .zoom_in => s.map.easeTo(.{ .zoom = @round(s.map.camera.zoom) + 1 }, 250),
@@ -246,6 +323,127 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
         .north => s.map.easeTo(.{ .bearing = 0, .pitch = 0 }, 400),
         .tilt => s.map.easeTo(.{ .pitch = if (s.map.camera.pitch > 0) 0 else 55 }, 400),
     }
+}
+
+fn exitNav(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    s.nav = null;
+    s.exit_asked = false;
+    s.map.easeTo(.{ .pitch = 0, .bearing = 0 }, 1000);
+    drawRoute(s, fx, arena, .{});
+}
+
+/// Messages from the page embedding the map (Turf).
+pub fn hostMessage(json: []const u8) ?Msg {
+    var buf: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const m = std.json.parseFromSliceLeaky(struct { type: []const u8 = "" }, fba.allocator(), json, .{ .ignore_unknown_fields = true }) catch return null;
+    if (std.mem.eql(u8, m.type, "WUFOUR_FORCE_EXIT_NAVIGATION")) return .force_exit;
+    return null;
+}
+
+/// "/embed/picker?..." → .picker; anything else is the full map.
+fn embedMode(link: []const u8) Embed {
+    const path = link[0 .. std.mem.indexOfAny(u8, link, "?#") orelse link.len];
+    const prefix = "/embed/";
+    if (!std.mem.startsWith(u8, path, prefix)) return .full;
+    return std.meta.stringToEnum(Embed, std.mem.trimEnd(u8, path[prefix.len..], "/")) orelse .full;
+}
+
+/// After a pan, zoom or flight: the picker names the place under its pin 400 ms later.
+fn mapStopped(s: *State, fx: zui.Fx(Msg)) void {
+    if (s.embed != .picker) return;
+    s.idle_seq +%= 1;
+    fx.after(400, .{ .idle = s.idle_seq });
+}
+
+fn resolvePicker(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    s.picker_busy = true;
+    s.reverse_seq +%= 1;
+    const url = api.reverseUrl(arena, s.map.camera.center, zui.i18n.language()) catch return;
+    fx.fetch(.{ .url = url, .tag = (s.reverse_seq << 2) | @intFromEnum(Field.picker) }, onReversed);
+}
+
+fn onSocket(e: zui.SocketEvent) Msg {
+    return .{ .socket = e };
+}
+
+fn startTracking(s: *State, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    var buf: [256]u8 = undefined;
+    s.track.id.set(query(env.link, "track_id", &buf) orelse "DEMO_ID");
+    if (query(env.link, "vehicle", &buf)) |v| if (std.meta.stringToEnum(api.Mode, v)) |m| {
+        s.track.mode = m;
+    };
+    // The demo drives along the route once it is drawn.
+    if (std.mem.eql(u8, s.track.id.get(), "DEMO_ID")) return fx.after(1000, .demo_step);
+    connectTracking(s, fx, arena);
+}
+
+fn connectTracking(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    if (s.track.ended) return;
+    const url = std.fmt.allocPrint(arena, "{s}/?room={s}&role=viewer", .{ api.base, api.encode(arena, s.track.id.get()) catch return }) catch return;
+    s.track.opened = false;
+    s.track.socket = fx.openSocket(url, onSocket);
+}
+
+/// Live positions from the tracking room; reconnects with growing delays (1 s to 30 s) when the
+/// connection drops, and gives up after ten refusals in a row (the link has expired).
+fn trackingEvent(s: *State, e: zui.SocketEvent, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    if (e.socket != s.track.socket) return;
+    switch (e.kind) {
+        .open => s.track.opened = true,
+        .closed => {
+            if (s.track.ended) return;
+            s.track.attempts = if (s.track.opened) 0 else s.track.attempts + 1;
+            if (s.track.attempts > 10) return;
+            fx.after(@min(30_000, @as(u32, 1000) << @intCast(@min(s.track.attempts, 5))), .reconnect);
+        },
+        .message => {
+            const T = struct { status: ?[]const u8 = null, lat: ?f64 = null, lng: ?f64 = null, heading: ?f64 = null, vehicle: ?[]const u8 = null };
+            const d = std.json.parseFromSliceLeaky(T, arena, e.data, .{ .ignore_unknown_fields = true }) catch return;
+            if (d.status) |st| {
+                if (std.mem.eql(u8, st, "ENDED")) s.track.ended = true;
+                if (std.mem.eql(u8, st, "ENDED") or std.mem.eql(u8, st, "OFFLINE")) return;
+            }
+            const lat = d.lat orelse return;
+            const lng = d.lng orelse return;
+            if (!std.math.isFinite(lat) or !std.math.isFinite(lng)) return;
+            if (d.vehicle) |v| if (std.meta.stringToEnum(api.Mode, v)) |m| {
+                s.track.mode = m;
+            };
+            moveVehicle(s, .{ .lat = lat, .lng = lng }, d.heading orelse 0);
+        },
+    }
+}
+
+fn moveVehicle(s: *State, at: LatLng, heading: f64) void {
+    const first = s.track.vehicle == null;
+    s.track.vehicle = at;
+    s.track.heading = heading;
+    if (first) s.map.flyTo(.{ .center = at, .zoom = 16 }, 1200) else s.map.easeTo(.{ .center = at }, 1000);
+    // The route behind the vehicle is no longer drawn.
+    if (s.route) |r| {
+        var best: usize = 0;
+        var best_d = std.math.inf(f64);
+        for (r.points, 0..) |pt, i| {
+            const d = geo.distance(pt, at);
+            if (d < best_d) {
+                best_d = d;
+                best = i;
+            }
+        }
+        s.track.passed = best + 1;
+    }
+}
+
+/// DEMO_ID: the vehicle drives the route, two points a second.
+fn demoStep(s: *State, fx: zui.Fx(Msg)) void {
+    const r = s.route orelse return fx.after(500, .demo_step);
+    const i = s.track.demo_index;
+    if (i >= r.points.len) return;
+    const heading = if (i + 1 < r.points.len) geo.bearing(r.points[i], r.points[i + 1]) else 90;
+    moveVehicle(s, r.points[i], heading);
+    s.track.demo_index += 2;
+    fx.after(1000, .demo_step);
 }
 
 fn onLocated(l: zui.Location) Msg {
@@ -278,6 +476,7 @@ fn textOf(s: *State, f: Field) *Text {
         .main => &s.main,
         .start => &s.start_text,
         .dest => &s.dest_text,
+        .picker => &s.picker_text,
     };
 }
 
@@ -286,7 +485,12 @@ fn field(s: *const State, f: Field) []const u8 {
         .main => s.main.get(),
         .start => s.start_text.get(),
         .dest => s.dest_text.get(),
+        .picker => s.picker_text.get(),
     };
+}
+
+fn onPicker(text: []const u8) Msg {
+    return .{ .typed = .{ .field = .picker, .text = text } };
 }
 
 fn clearSuggestions(s: *State) void {
@@ -334,6 +538,11 @@ fn pickPlace(s: *State, f: Field, label: []const u8, at: LatLng, env: zui.Env, f
             s.dest = at;
             drawRoute(s, fx, arena, .{});
         },
+        .picker => {
+            s.picker_text.set(label);
+            s.picker_skip = true;
+            s.map.flyTo(.{ .center = at, .zoom = 16 }, 1200);
+        },
     }
     _ = env;
 }
@@ -380,6 +589,7 @@ fn useLocation(s: *State, f: Field, env: zui.Env, fx: zui.Fx(Msg), arena: std.me
             s.dest_text.set(t("Your Location"));
             drawRoute(s, fx, arena, .{});
         },
+        .picker => s.map.flyTo(.{ .center = p, .zoom = 16 }, 1200),
     }
 }
 
@@ -414,6 +624,11 @@ fn located(s: *State, l: zui.Location, env: zui.Env, fx: zui.Fx(Msg), arena: std
             const p: LatLng = .{ .lat = fix.lat, .lng = fix.lng };
             s.live = p;
             s.gps = .ok;
+            if (s.embed == .picker and !s.picker_located) {
+                s.picker_located = true;
+                s.map.flyTo(.{ .center = p, .zoom = 16 }, 1200);
+                return;
+            }
             if (s.waiting_for_gps) |f| {
                 s.waiting_for_gps = null;
                 if (f == .start and s.screen == .routing) {
@@ -437,6 +652,10 @@ fn located(s: *State, l: zui.Location, env: zui.Env, fx: zui.Fx(Msg), arena: std
         },
         .denied, .unavailable => {
             s.gps = if (l == .denied) .denied else .unavailable;
+            if (s.embed == .picker and !s.picker_located) {
+                s.picker_located = true;
+                resolvePicker(s, fx, arena);
+            }
             if (s.waiting_for_gps) |f| {
                 s.waiting_for_gps = null;
                 gpsUnavailable(s, f);
@@ -546,6 +765,7 @@ fn navigate(s: *State, raw: LatLng, gps_heading: ?f32, fx: zui.Fx(Msg), arena: s
     if (geo.distance(raw, dest) < 60) {
         n.arrived = true;
         fx.speak(t("You have arrived at your destination."));
+        fx.post("{\"type\":\"WUFOUR_NAVIGATION_ARRIVED\"}");
         return;
     }
     if (n.last_raw) |last| {
@@ -587,13 +807,41 @@ fn navigate(s: *State, raw: LatLng, gps_heading: ?f32, fx: zui.Fx(Msg), arena: s
 
 // ---- The address (web URL) -----------------------------------------------------------------
 
-/// ?start=lat,lng&dest=lat,lng&startName=&destName=&mode=full[&nav=1], as Maps-js keeps it.
+const route_params = [_][]const u8{ "start", "dest", "startName", "destName", "mode", "nav" };
+
+/// The path and the parameters that are not the route's (an embed keeps its key and track_id).
+fn setLinkBase(s: *State, link: []const u8) void {
+    var out: std.ArrayList(u8) = .initBuffer(&s.link_base);
+    const q_at = std.mem.indexOfScalar(u8, link, '?');
+    const path = link[0 .. q_at orelse link.len];
+    out.appendSliceBounded(if (path.len == 0) "/" else path) catch return;
+    var first = true;
+    if (q_at) |at| {
+        var it = std.mem.tokenizeScalar(u8, link[at + 1 ..], '&');
+        while (it.next()) |pair| {
+            const name = pair[0 .. std.mem.indexOfScalar(u8, pair, '=') orelse pair.len];
+            const route = for (route_params) |r| {
+                if (std.mem.eql(u8, r, name)) break true;
+            } else false;
+            if (route) continue;
+            out.appendSliceBounded(if (first) "?" else "&") catch break;
+            out.appendSliceBounded(pair) catch break;
+            first = false;
+        }
+    }
+    s.link_base_len = out.items.len;
+}
+
+/// The page address with start=lat,lng&dest=lat,lng&startName=&destName=&mode=<mode>[&nav=1],
+/// as Maps-js keeps it; the path and other parameters stay.
 fn updateLink(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
-    const from = s.start orelse return fx.setLink("/");
-    const to = s.dest orelse return fx.setLink("/");
-    const link = std.fmt.allocPrint(arena, "/?start={d:.6},{d:.6}&dest={d:.6},{d:.6}&startName={s}&destName={s}&mode=full{s}", .{
-        from.lat,                                     from.lng,                                    to.lat, to.lng,
-        api.encode(arena, s.start_text.get()) catch "", api.encode(arena, s.dest_text.get()) catch "", if (s.nav != null) "&nav=1" else "",
+    const base = s.link_base[0..s.link_base_len];
+    const from = s.start orelse return fx.setLink(base);
+    const to = s.dest orelse return fx.setLink(base);
+    const sep: []const u8 = if (std.mem.indexOfScalar(u8, base, '?') == null) "?" else "&";
+    const link = std.fmt.allocPrint(arena, "{s}{s}start={d:.6},{d:.6}&dest={d:.6},{d:.6}&startName={s}&destName={s}&mode={t}{s}", .{
+        base,                                             sep,                                              from.lat, from.lng, to.lat, to.lng,
+        api.encode(arena, s.start_text.get()) catch "", api.encode(arena, s.dest_text.get()) catch "", s.embed,  if (s.nav != null) "&nav=1" else "",
     }) catch return;
     fx.setLink(link);
 }
@@ -693,6 +941,18 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
 
     if (s.nav) |n| {
         navOverlay(s, n, ui, c);
+    } else if (s.embed == .picker) {
+        pickerOverlay(s, ui, c);
+    } else if (s.embed == .tracking) {
+        // The map, the route and the vehicle only.
+    } else if (s.embed == .driver) {
+        if (s.route_status != .none) {
+            ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 20 }, .align_items = .center }, .{});
+            ui.begin(.{ .width = .{ .px = @min(400, ui.env.width * 0.9) }, .padding = .all(15), .radius = 20, .background = c.panel, .border_width = 1, .border_color = c.line }, .{});
+            routeInfo(s, ui, c);
+            ui.end();
+            ui.end();
+        }
     } else if (wide) {
         ui.begin(.{
             .position = .absolute,
@@ -732,7 +992,16 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
 }
 
 fn routeLines(s: *const State, ui: *zui.Ui(Msg)) []const map.Route {
-    const r = s.route orelse return &.{};
+    const full = s.route orelse return &.{};
+    var r = full;
+    // Tracking: only the part still ahead of the vehicle, starting at the vehicle.
+    if (s.embed == .tracking) if (s.track.vehicle) |v| {
+        const rest = full.points[@min(s.track.passed, full.points.len)..];
+        const pts = ui.arena().alloc(LatLng, rest.len + 1) catch return &.{};
+        pts[0] = v;
+        @memcpy(pts[1..], rest);
+        r.points = pts;
+    };
     const brand = zui.Color.hex("#2563eb");
     const line: map.Route = switch (s.mode) {
         // Walking dotted, cycling dashed, as Maps-js draws them.
@@ -743,6 +1012,48 @@ fn routeLines(s: *const State, ui: *zui.Ui(Msg)) []const map.Route {
     const out = ui.arena().alloc(map.Route, 1) catch return &.{};
     out[0] = line;
     return out;
+}
+
+fn modeIcon(m: api.Mode) zui.Icon {
+    return switch (m) {
+        .car => icons.car,
+        .motorcycle => icons.motorcycle,
+        .truck => icons.truck,
+        .bicycle => icons.bicycle,
+        .walk => icons.walk,
+    };
+}
+
+/// The picker: a search pill on top, a pin fixed at the centre, and Confirm at the bottom.
+fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
+    ui.begin(.{ .position = .absolute, .inset = .{ .top = ui.env.safe.top + 20, .start = 0, .end = 0 }, .align_items = .center }, .{});
+    ui.begin(.{ .width = .{ .px = @min(400, ui.env.width * 0.9) }, .gap = 8 }, .{});
+    ui.begin(.{ .direction = .row, .align_items = .center, .gap = 10, .padding = .xy(16, 0), .height = .{ .px = 50 }, .radius = 25, .background = c.field, .border_width = 1, .border_color = c.field_line }, .{ .key = zui.key("picker-row") });
+    ui.icon(icons.pin, 18, c.ink_2, .{}, 0);
+    ui.input(.{
+        .key = zui.key("picker-input"),
+        .value = s.picker_text.get(),
+        .placeholder = t("Loading location..."),
+        .on_change = onPicker,
+        .on_focus = .{ .focused = .picker },
+        .on_blur = .{ .blur_seq = .picker },
+        .style = .{ .grow = 1, .height = .{ .px = 48 }, .font_size = 15, .weight = 500, .color = c.ink },
+    });
+    if (s.picker_busy) ui.text("…", .{ .font_size = 15, .color = c.brand });
+    ui.end();
+    if (s.list_for == .picker and s.suggest != .location_only) suggestionList(s, ui, c);
+    ui.end();
+    ui.end();
+
+    // The pin's tip marks the centre of the map.
+    const pin = 42;
+    ui.iconOutlined(icons.pin, pin, c.danger, zui.Color.white, 1.5, .{ .position = .absolute, .inset = .{ .start = ui.env.width / 2 - pin / 2, .top = ui.env.height / 2 - pin } }, zui.key("picker-pin"));
+
+    ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 30 }, .align_items = .center }, .{});
+    ui.begin(.{ .padding = .xy(40, 14), .radius = 30, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .confirm_place });
+    ui.text(t("Confirm Location"), .{ .font_size = 16, .weight = 700, .color = zui.Color.white });
+    ui.end();
+    ui.end();
 }
 
 fn markers(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Marker {
@@ -759,6 +1070,16 @@ fn markers(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Marke
         }
     }
     if (s.dest) |p| list.append(a, .{ .at = p, .icon = icons.pin, .size = 36, .color = c.danger, .outline = zui.Color.white, .border_width = 1.5, .anchor = .bottom, .key = zui.key("dest") }) catch {};
+    if (s.track.vehicle) |p| list.append(a, .{
+        .at = p,
+        .icon = modeIcon(s.track.mode),
+        .size = 40,
+        .icon_size = 24,
+        .color = zui.Color.hex("#2563eb"),
+        .badge = zui.Color.white,
+        .heading = s.track.heading,
+        .key = zui.key("vehicle"),
+    }) catch {};
     return list.items;
 }
 
@@ -835,6 +1156,7 @@ fn suggestionList(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
         .start => std.mem.eql(u8, s.dest_text.get(), t("Your Location")),
         .dest => s.start_live,
         .main => false,
+        .picker => true,
     };
     if (!other_is_live) {
         ui.begin(.{ .direction = .row, .gap = 8, .align_items = .center, .padding = .xy(16, 14), .pressed_background = c.soft }, .{ .on_press = .picked_location, .key = zui.key("your-location") });
@@ -909,7 +1231,7 @@ fn routeInfo(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
             ui.text(duration(ui, r.seconds), .{ .font_size = 18, .weight = 700, .color = c.ink });
             ui.text(ui.tf("({n} km)", .{ .n = km(ui, r.km) }), .{ .font_size = 18, .color = c.ink_2 });
             ui.end();
-            if (s.start_live) {
+            if (s.start_live or s.embed == .driver) {
                 ui.begin(.{ .align_items = .center, .padding = .xy(20, 12), .radius = 24, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .start_nav });
                 ui.text(t("Start"), .{ .font_size = 15, .weight = 600, .color = zui.Color.white });
                 ui.end();
@@ -1040,7 +1362,7 @@ test "search, pick a place, route from the live position, navigate" {
     ));
     try testing.expect(D.findText("10 min") != 0);
     try testing.expect(D.findText("(4.2 km)") != 0);
-    try testing.expect(std.mem.indexOf(u8, zui.host.link.items, "start=33.513800,36.276500") != null);
+    try testing.expect(std.mem.startsWith(u8, zui.host.link.items, "/?start=33.513800,36.276500"));
 
     try D.press("Start");
     try testing.expect(D.findText("Exit") != 0);
@@ -1070,11 +1392,61 @@ test "a slow answer for an old route does not replace the new one" {
     try testing.expect(D.findText("30 min") != 0);
 }
 
+test "an embed keeps its path, key and track id in its address" {
+    D.startWith(400, 800, "/embed/tracking?track_id=T9&key=K&start=33.5,36.27&dest=33.52,36.31&mode=tracking");
+    defer D.reset();
+    try testing.expect(D.respond("/api/route/valhalla", 200, "{\"trip\":{\"summary\":{\"time\":600,\"length\":4.2},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
+    try testing.expect(std.mem.startsWith(u8, zui.host.link.items, "/embed/tracking?track_id=T9&key=K&start=33.500000,36.270000"));
+    try testing.expect(std.mem.endsWith(u8, zui.host.link.items, "&mode=tracking"));
+}
+
 test "opened with a route link" {
     D.startWith(400, 800, "/?start=33.5,36.27&dest=33.52,36.31&startName=Home&destName=Work");
     defer D.reset();
     try testing.expect(D.pending("/api/route/valhalla") != null);
     try testing.expect(D.findText("Calculating route...") != 0);
+}
+
+test "picker: names the place under the pin and sends it to the page" {
+    D.startWith(400, 800, "/embed/picker?key=K");
+    defer D.reset();
+    D.locate(3.1579, 101.7116);
+    // The flight to the position ends; 400 ms later the centre is named.
+    while (D.frame()) {}
+    D.runTimers();
+    try testing.expect(D.respond("/api/v1/reverse", 200, "{\"success\":true,\"place\":{\"name\":\"Suria KLCC\"}}"));
+    try testing.expect(D.findText("Confirm Location") != 0);
+    try D.press("Confirm Location");
+    const posted = zui.host.posted.items;
+    try testing.expect(std.mem.indexOf(u8, posted, "\"type\":\"WUFOUR_LOCATION_SELECTED\"") != null);
+    try testing.expect(std.mem.indexOf(u8, posted, "\"address\":\"Suria KLCC\"") != null);
+    try testing.expect(std.mem.indexOf(u8, posted, "\"lat\":3.1579") != null);
+}
+
+test "driver: Exit asks the page, which closes navigation" {
+    D.startWith(400, 800, "/embed/driver?start=33.5,36.27&dest=33.52,36.31&nav=1");
+    defer D.reset();
+    try testing.expect(D.respond("/api/route/valhalla", 200, "{\"trip\":{\"summary\":{\"time\":600,\"length\":4.2},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
+    try testing.expect(D.findText("Exit") != 0); // ?nav=1 started navigation
+    try D.press("Exit");
+    try testing.expectEqualStrings("{\"type\":\"WUFOUR_NAVIGATION_EXITED\"}", zui.host.posted.items);
+    try testing.expect(D.findText("Exit") != 0); // still navigating until the page says so
+    D.R.hostMessage("{\"type\":\"WUFOUR_FORCE_EXIT_NAVIGATION\"}");
+    try testing.expect(D.findText("Exit") == 0);
+}
+
+test "tracking: the vehicle follows the room's positions" {
+    D.startWith(400, 800, "/embed/tracking?track_id=T1&start=33.5,36.27&dest=33.52,36.31");
+    defer D.reset();
+    try testing.expect(std.mem.indexOf(u8, zui.host.socket_url.items, "/?room=T1&role=viewer") != null);
+    try testing.expect(!zui.host.location_on);
+    D.R.socketEvent(zui.host.socket_id, .open, "");
+    D.R.socketEvent(zui.host.socket_id, .message, "{\"lat\":33.51,\"lng\":36.29,\"heading\":90,\"vehicle\":\"car\"}");
+    try testing.expectApproxEqAbs(@as(f64, 33.51), D.R.appState().track.vehicle.?.lat, 1e-9);
+    try testing.expectEqual(api.Mode.car, D.R.appState().track.mode);
+    D.R.socketEvent(zui.host.socket_id, .message, "{\"status\":\"ENDED\"}");
+    D.R.socketEvent(zui.host.socket_id, .closed, "");
+    try testing.expect(zui.host.timers.items.len == 0); // ended: no reconnect
 }
 
 test {
