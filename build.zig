@@ -2,7 +2,13 @@ const std = @import("std");
 const core = @import("zig_core");
 
 pub fn build(b: *std.Build) void {
+    // Where the phone apps reach the Maps server. For development over USB:
+    //   adb reverse tcp:5106 tcp:5106  and  zig build android -Dserver=http://127.0.0.1:5106
+    const options = b.addOptions();
+    options.addOption([]const u8, "server", b.option([]const u8, "server", "Maps server for the phone apps") orelse "https://maps.wreseal.com");
+
     core.addApp(b, b.dependency("zig_core", .{}), .{
+        .client_config = options.createModule(),
         .name = "maps",
         .client = b.path("src/client/app.zig"),
         .server = b.path("src/server/main.zig"),
