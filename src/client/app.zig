@@ -10,6 +10,8 @@ const map = @import("map");
 const theme = @import("theme.zig");
 
 pub const panic = zui.panic;
+/// The map runs under the status and navigation bars; the controls keep clear of them.
+pub const edge_to_edge = true;
 
 pub const Msg = union(enum) {
     map: zui.Pointer,
