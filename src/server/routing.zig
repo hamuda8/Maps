@@ -41,7 +41,10 @@ fn validKey(ctx: *http.Context) !bool {
 
 /// Browsers send Sec-Fetch-Site; "same-origin" means the request came from our own pages.
 /// Older browsers (Safari before 16.4) do not, so fall back to the Referer's host.
+/// The Maps page itself (same origin), or the Maps phone apps (?client=app). Neither proves
+/// much (headers and queries can be copied), so both stay rate-limited per visitor.
 fn fromOwnPage(ctx: *http.Context) bool {
+    if (ctx.queryParam("client")) |c| if (std.mem.eql(u8, c, "app")) return true;
     if (ctx.header("sec-fetch-site")) |site| return std.mem.eql(u8, site, "same-origin");
     const referer = ctx.header("referer") orelse return false;
     const host = ctx.header("host") orelse return false;

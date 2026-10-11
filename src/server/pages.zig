@@ -16,9 +16,11 @@ fn publicFile(ctx: *http.Context, rel: []const u8) ![]const u8 {
     return Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(8 << 20));
 }
 
-/// GET /: the map page.
+/// GET /: the map page: the zui app (index.html of its web build), else Maps-js's page while
+/// the public folder is still Maps-js's.
 pub fn mapPage(ctx: *http.Context) !void {
-    const html = publicFile(ctx, "markup/index.html") catch return a_.fail(ctx, .internal_server_error, "Internal Server Error");
+    const html = publicFile(ctx, "index.html") catch publicFile(ctx, "markup/index.html") catch return a_.fail(ctx, .internal_server_error, "Internal Server Error");
+    try ctx.setHeader("cache-control", "no-cache");
     return ctx.send(.ok, "text/html; charset=utf-8", html);
 }
 

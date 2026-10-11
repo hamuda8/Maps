@@ -27,6 +27,8 @@
         <integer>1</integer>
         <integer>2</integer>
     </array>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Wufour Maps shows where you are and gives directions from there.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>
