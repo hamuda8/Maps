@@ -1,15 +1,25 @@
-//! Place search and reverse geocoding. For now through Photon (OpenStreetMap data), as Maps-js
-//! does; the multi-region index built from .osm.pbf files replaces it later in step 3, with
-//! Photon kept as the fallback for regions without local data. Cached, and rate-limited per
-//! visitor unless the request carries a valid API key.
+//! Place search and reverse geocoding from the OpenStreetMap regions in REGIONS_DIR (zig-core
+//! geo: any number of countries, each a .osm.pbf file; a new file is indexed and searchable
+//! within a minute). A Photon-compatible geocoder (GEOCODER_FALLBACK_URL, development only)
+//! answers for places no region covers. Rate-limited per visitor unless the request carries a
+//! valid API key.
 
 const std = @import("std");
 const http = @import("http");
 const a_ = @import("app.zig");
 const keys = @import("keys.zig");
 const settings = @import("settings.zig");
+const geo = @import("geo");
 
-const syria_bbox = "35.5,32.3,42.4,37.4"; // west,south,east,north
+/// Looks for new, changed and removed region files every minute; indexes new ones.
+pub fn regionsLoop() std.Io.Cancelable!void {
+    const app = a_.app;
+    while (true) {
+        app.regions.refresh() catch |e| std.log.err("geo: {t}", .{e});
+        try app.io.sleep(.fromSeconds(60), .awake);
+    }
+}
+
 const cache_ms = 10 * 60_000;
 const cache_max = 1000;
 
@@ -69,17 +79,7 @@ const Feature = struct {
     } = .{},
 };
 
-pub const Place = struct {
-    name: []const u8,
-    street: ?[]const u8,
-    area: ?[]const u8,
-    city: ?[]const u8,
-    state: ?[]const u8,
-    country: ?[]const u8,
-    lat: f64,
-    lng: f64,
-    label: []const u8,
-};
+pub const Place = geo.Place;
 
 fn first(vals: []const ?[]const u8) ?[]const u8 {
     for (vals) |v| if (v) |s| if (s.len > 0) return s;
@@ -123,7 +123,15 @@ fn num(s: ?[]const u8, min: f64, max: f64) ?f64 {
     return if (std.math.isFinite(n) and n >= min and n <= max) n else null;
 }
 
-/// GET /api/v1/search?q=...&lat=&lng=&limit=
+/// "en", "ar", ... from ?lang=, for names that have a translation.
+fn language(ctx: *http.Context) ?[]const u8 {
+    const l = ctx.queryParam("lang") orelse return null;
+    if (l.len < 2 or l.len > 3) return null;
+    for (l) |c| if (!std.ascii.isLower(c)) return null;
+    return l;
+}
+
+/// GET /api/v1/search?q=...&lat=&lng=&limit=&lang=
 pub fn search(ctx: *http.Context) !void {
     if (!try allowed(ctx, "search")) return a_.fail(ctx, .too_many_requests, "Too many searches, try again in a minute");
     // Same text, same answer: case and extra spaces do not make a new cache entry.
@@ -136,13 +144,22 @@ pub fn search(ctx: *http.Context) !void {
     const q = words.items[0..@min(words.items.len, 100)];
     if (q.len < 2) return ctx.sendJson(.ok, .{ .success = true, .results = &[_]Place{} });
     const limit: u32 = if (num(ctx.queryParam("limit"), 1, 10)) |n| @intFromFloat(@floor(n)) else 6;
+    const lang = language(ctx);
+    const near: ?[2]f64 = if (num(ctx.queryParam("lat"), -90, 90)) |lat| (if (num(ctx.queryParam("lng"), -180, 180)) |lng| .{ lat, lng } else null) else null;
+
+    const app = a_.app;
+    const local = try app.regions.search(ctx.arena, q, near, lang, limit);
+    const covered = if (near) |p| app.regions.covers(p[0], p[1]) else app.regions.count() > 0;
+    if (local.len > 0 or covered or app.config.geocoder_fallback.len == 0) {
+        try ctx.setHeader("cache-control", "public, max-age=300");
+        return ctx.sendJson(.ok, .{ .success = true, .results = local });
+    }
 
     var url: std.ArrayList(u8) = .empty;
-    try url.print(ctx.arena, "{s}/api/?q={s}&limit={d}&bbox={s}", .{ a_.app.config.photon_url, try http.encode(ctx.arena, q), limit, syria_bbox });
+    try url.print(ctx.arena, "{s}/api/?q={s}&limit={d}", .{ app.config.geocoder_fallback, try http.encode(ctx.arena, q), limit });
     // The map centre only biases the ranking: rounded to about a kilometre, so panning reuses
     // cached answers.
-    if (num(ctx.queryParam("lat"), -90, 90)) |lat| if (num(ctx.queryParam("lng"), -180, 180)) |lng|
-        try url.print(ctx.arena, "&lat={d:.2}&lon={d:.2}", .{ lat, lng });
+    if (near) |p| try url.print(ctx.arena, "&lat={d:.2}&lon={d:.2}", .{ p[0], p[1] });
 
     const body = cached(ctx.arena, url.items) catch return a_.fail(ctx, .bad_gateway, "Search is not available right now");
     const parsed = std.json.parseFromSliceLeaky(struct { features: []const Feature = &.{} }, ctx.arena, body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
@@ -158,7 +175,13 @@ pub fn reverse(ctx: *http.Context) !void {
     if (!try allowed(ctx, "reverse")) return a_.fail(ctx, .too_many_requests, "Too many searches, try again in a minute");
     const lat = num(ctx.queryParam("lat"), -90, 90) orelse return a_.fail(ctx, .bad_request, "lat and lng are required");
     const lng = num(ctx.queryParam("lng"), -180, 180) orelse return a_.fail(ctx, .bad_request, "lat and lng are required");
-    const url = try std.fmt.allocPrint(ctx.arena, "{s}/reverse?lat={d:.5}&lon={d:.5}&limit=1", .{ a_.app.config.photon_url, lat, lng });
+    const app = a_.app;
+    const local = try app.regions.reverse(ctx.arena, lat, lng, language(ctx));
+    if (local != null or app.regions.covers(lat, lng) or app.config.geocoder_fallback.len == 0) {
+        try ctx.setHeader("cache-control", "public, max-age=300");
+        return ctx.sendJson(.ok, .{ .success = true, .place = local });
+    }
+    const url = try std.fmt.allocPrint(ctx.arena, "{s}/reverse?lat={d:.5}&lon={d:.5}&limit=1", .{ app.config.geocoder_fallback, lat, lng });
     const body = cached(ctx.arena, url) catch return a_.fail(ctx, .bad_gateway, "Search is not available right now");
     const parsed = std.json.parseFromSliceLeaky(struct { features: []const Feature = &.{} }, ctx.arena, body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
         return a_.fail(ctx, .bad_gateway, "Search is not available right now");

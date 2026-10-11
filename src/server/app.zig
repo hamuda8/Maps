@@ -6,6 +6,7 @@ const std = @import("std");
 const Io = std.Io;
 const mongo = @import("mongo");
 const env_mod = @import("env");
+const geo = @import("geo");
 const bson = mongo.bson;
 
 pub const Config = struct {
@@ -20,7 +21,12 @@ pub const Config = struct {
     tile_proxy: bool,
     valhalla_url: []const u8,
     valhalla_api_key: []const u8,
-    photon_url: []const u8,
+    /// Folder of .osm.pbf files, one per region (country, continent or planet): search and
+    /// reverse geocoding come from these.
+    regions_dir: []const u8,
+    /// A Photon-compatible geocoder for places no region covers. For development only: empty
+    /// (off) unless set.
+    geocoder_fallback: []const u8,
     auth_host: []const u8,
     public_url: ?[]const u8,
     trust_proxy: bool,
@@ -41,7 +47,8 @@ pub const Config = struct {
             .tile_proxy = e.flag("MAPS_TILE_PROXY", true),
             .valhalla_url = e.str("VALHALLA_URL", "http://127.0.0.1:8002/route"),
             .valhalla_api_key = e.str("VALHALLA_API_KEY", ""),
-            .photon_url = std.mem.trimEnd(u8, e.str("PHOTON_URL", "https://photon.komoot.io"), "/"),
+            .regions_dir = e.str("REGIONS_DIR", "regions"),
+            .geocoder_fallback = std.mem.trimEnd(u8, e.str("GEOCODER_FALLBACK_URL", ""), "/"),
             .auth_host = e.str("AUTH_HOST", "http://localhost:4000"),
             .public_url = if (e.get("MAPS_PUBLIC_URL")) |v| (if (v.len > 0) std.mem.trimEnd(u8, v, "/") else null) else null,
             .trust_proxy = e.flag("TRUST_PROXY", false),
@@ -59,6 +66,7 @@ pub const App = struct {
     /// Outgoing requests: Valhalla, Photon, tile server, Wufour sign-in.
     client: std.http.Client,
     client_lock: Io.Mutex = .init,
+    regions: *geo.Regions,
     started_ms: i64,
 
     pub fn collection(a: *App, name: []const u8) mongo.Collection {

@@ -8,6 +8,7 @@ const std = @import("std");
 const http = @import("http");
 const mongo = @import("mongo");
 const env_mod = @import("env");
+const geo = @import("geo");
 const a_ = @import("app.zig");
 const keys = @import("keys.zig");
 const tiles = @import("tiles.zig");
@@ -26,7 +27,11 @@ pub fn main(init: std.process.Init) !void {
 
     const db = try mongo.Client.init(io, gpa, config.mongo_uri);
     defer db.deinit();
+    var regions = geo.Regions.init(io, gpa, config.regions_dir);
+    defer regions.deinit();
+    regions.log = logGeo;
     var state: a_.App = .{
+        .regions = &regions,
         .io = io,
         .gpa = gpa,
         .config = config,
@@ -70,6 +75,7 @@ pub fn main(init: std.process.Init) !void {
 
     var group: std.Io.Group = .init;
     defer group.cancel(io);
+    try group.concurrent(io, search.regionsLoop, .{});
     try group.concurrent(io, keys.flushLoop, .{});
     try group.concurrent(io, tracking.watchdogLoop, .{});
     try group.concurrent(io, tracking.pingLoop, .{});
@@ -82,6 +88,10 @@ pub fn main(init: std.process.Init) !void {
         .trust_proxy = config.trust_proxy,
         .on_error = onError,
     });
+}
+
+fn logGeo(line: []const u8) void {
+    std.log.info("{s}", .{line});
 }
 
 /// The indexes Maps-js creates; existing ones are left as they are.
