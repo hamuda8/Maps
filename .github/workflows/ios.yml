@@ -39,15 +39,27 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           xcrun simctl install "$udid" zig-out/ios/maps.app
-          xcrun simctl launch "$udid" com.wufour.maps
-          sleep 8
-          xcrun simctl io "$udid" screenshot ios-simulator.png
-          # Fails the job if the app is no longer running (crashed after launch).
-          xcrun simctl spawn "$udid" launchctl list | grep com.wufour.maps
+          mkdir -p screenshots
+
+          # run <name> [launch arguments]: launch, screenshot, fail if the app is no longer running.
+          run() {
+            name=$1; shift
+            xcrun simctl terminate "$udid" com.wufour.maps 2>/dev/null || true
+            xcrun simctl launch --stderr="$PWD/screenshots/$name.log" "$udid" com.wufour.maps "$@"
+            sleep 6
+            xcrun simctl io "$udid" screenshot "screenshots/$name.png"
+            xcrun simctl spawn "$udid" launchctl list | grep com.wufour.maps
+            cat "screenshots/$name.log" || true
+          }
+          xcrun simctl ui "$udid" appearance light
+          run english
+          run arabic -AppleLanguages "(ar)"
+          xcrun simctl ui "$udid" appearance dark
+          run arabic-dark -AppleLanguages "(ar)"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-simulator-screenshot
-          path: ios-simulator.png
+          name: ios-simulator-screenshots
+          path: screenshots
           if-no-files-found: ignore
