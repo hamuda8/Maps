@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
         .web = b.path("shells/web"),
         .android_manifest = b.path("shells/android/AndroidManifest.xml"),
         .ios_info_plist = b.path("shells/ios/Info.plist"),
+        .android_res = b.path("shells/android/res"),
+        .android_res_files = &.{"mipmap-xxxhdpi/ic_launcher.png"},
         // The map of the JS library other sites load (/sdk/wufour-maps.js).
         .web_extra = &.{
             .{ .name = "sdk", .root = b.path("src/sdk/sdk.zig") },

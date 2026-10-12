@@ -12,6 +12,7 @@
 
     <application
         android:label="Wufour Maps"
+        android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:extractNativeLibs="false"
         android:usesCleartextTraffic="true">
