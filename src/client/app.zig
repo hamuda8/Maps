@@ -342,7 +342,9 @@ pub fn hostMessage(json: []const u8) ?Msg {
 }
 
 /// "/embed/picker?..." → .picker; anything else is the full map.
-fn embedMode(link: []const u8) Embed {
+fn embedMode(link_in: []const u8) Embed {
+    // Phones open with a whole URL (an App Link): the path starts after the host.
+    const link = if (std.mem.indexOf(u8, link_in, "://")) |at| (if (std.mem.indexOfScalarPos(u8, link_in, at + 3, '/')) |p| link_in[p..] else "/") else link_in;
     const path = link[0 .. std.mem.indexOfAny(u8, link, "?#") orelse link.len];
     const prefix = "/embed/";
     if (!std.mem.startsWith(u8, path, prefix)) return .full;
@@ -1390,6 +1392,11 @@ test "a slow answer for an old route does not replace the new one" {
     try testing.expect(D.findText("1 min") == 0);
     try testing.expect(D.respond("pedestrian", 200, "{\"trip\":{\"summary\":{\"time\":1800,\"length\":2.5},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
     try testing.expect(D.findText("30 min") != 0);
+}
+
+test "a phone opened with a whole URL finds the embed mode" {
+    try testing.expectEqual(Embed.tracking, embedMode("https://maps.wufour.com/embed/tracking?track_id=T"));
+    try testing.expectEqual(Embed.full, embedMode("https://maps.wufour.com"));
 }
 
 test "an embed keeps its path, key and track id in its address" {
