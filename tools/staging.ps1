@@ -2,6 +2,7 @@
 # Settings come from Maps-js/.env.staging (the same database and Valhalla key the Node staging
 # server used). Run from anywhere:  powershell -File C:\MProjects\Maps\tools\staging.ps1
 # Roll back to Node: stop maps-server.exe, then `npm run staging` in C:\MProjects\Maps-js.
+# Build first:  zig build server -Doptimize=safe   and   zig build web -Doptimize=small
 
 $ErrorActionPreference = 'Stop'
 $maps = Split-Path -Parent $PSScriptRoot
