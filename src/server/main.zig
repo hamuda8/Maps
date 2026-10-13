@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
 
-    const env = try env_mod.Env.load(arena, io, init.environ_map, &.{ ".env.production", ".env" });
+    const env = try env_mod.Env.loadApp(arena, io, init.environ_map, "maps");
     const config = a_.Config.load(&env);
 
     const db = try mongo.Client.init(io, gpa, config.mongo_uri);
@@ -36,10 +36,13 @@ pub fn main(init: std.process.Init) !void {
         .gpa = gpa,
         .config = config,
         .db = db,
-        .client = .{ .allocator = gpa, .io = io },
+        .fetch = .init(io, gpa),
+        .wufour = undefined,
         .started_ms = std.Io.Timestamp.now(io, .real).toMilliseconds(),
     };
-    defer state.client.deinit();
+    defer state.fetch.deinit();
+    state.wufour = .{ .fetch = &state.fetch, .host = config.auth_host };
+    defer state.wufour.deinit();
     a_.app = &state;
 
     createIndexes(arena) catch |err| {

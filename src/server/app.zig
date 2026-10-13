@@ -7,6 +7,9 @@ const Io = std.Io;
 const mongo = @import("mongo");
 const env_mod = @import("env");
 const geo = @import("geo");
+const fetch_mod = @import("fetch");
+const wufour_mod = @import("wufour");
+const http = @import("http");
 const bson = mongo.bson;
 
 pub const Config = struct {
@@ -64,8 +67,8 @@ pub const App = struct {
     config: Config,
     db: *mongo.Client,
     /// Outgoing requests: Valhalla, Photon, tile server, Wufour sign-in.
-    client: std.http.Client,
-    client_lock: Io.Mutex = .init,
+    fetch: fetch_mod.Client,
+    wufour: wufour_mod.Verifier,
     regions: *geo.Regions,
     started_ms: i64,
 
@@ -110,39 +113,20 @@ pub const Upstream = struct {
     body: []const u8,
 };
 
-/// GET (or POST with a JSON body) to another service. Errors when it cannot be reached.
+/// GET (or POST with a JSON body) to another service, through zig-core's fetch: a time limit,
+/// and a failed request's connection is never reused. (std.http.Client alone put a connection
+/// whose send failed back in its pool and handed it out again for every later request to that
+/// host: after the tile server reset an idle connection, every new tile answered 502 at once
+/// until a restart.) Errors when the service cannot be reached.
 pub fn upstream(arena: std.mem.Allocator, method: std.http.Method, url: []const u8, json_body: ?[]const u8, headers: []const std.http.Header) !Upstream {
-    // A pooled connection the other side closed while idle fails at once: try again on a new
-    // one. Every call here only reads (tiles, routes, places, token checks), so repeating is safe.
-    return upstreamOnce(arena, method, url, json_body, headers) catch |e| switch (e) {
-        error.OutOfMemory => e,
-        else => upstreamOnce(arena, method, url, json_body, headers),
-    };
-}
-
-fn upstreamOnce(arena: std.mem.Allocator, method: std.http.Method, url: []const u8, json_body: ?[]const u8, headers: []const std.http.Header) !Upstream {
-    var req = try app.client.request(method, try std.Uri.parse(url), .{
-        .extra_headers = headers,
-        .redirect_behavior = .unhandled,
-        .keep_alive = true,
-        // Bodies are passed on or parsed as they are, so ask for them uncompressed.
-        .headers = .{ .accept_encoding = .omit },
+    const res = try app.fetch.fetch(arena, url, .{
+        .method = method,
+        .headers = headers,
+        .body = json_body,
+        .content_type = if (json_body != null) "application/json" else null,
+        .timeout_ms = 20_000,
     });
-    defer req.deinit();
-    if (json_body) |b| {
-        req.transfer_encoding = .{ .content_length = b.len };
-        req.headers.content_type = .{ .override = "application/json" };
-        var w = try req.sendBodyUnflushed(&.{});
-        try w.writer.writeAll(b);
-        try w.end();
-        try req.connection.?.flush();
-    } else try req.sendBodiless();
-    var res = try req.receiveHead(&.{});
-    const content_type = try arena.dupe(u8, res.head.content_type orelse "");
-    const status = res.head.status;
-    var transfer: [64]u8 = undefined;
-    const body = try res.reader(&transfer).allocRemaining(arena, .limited(16 << 20));
-    return .{ .status = status, .content_type = content_type, .body = body };
+    return .{ .status = @fromBackingInt(@as(u10, @intCast(res.status))), .content_type = res.content_type, .body = res.body };
 }
 
 /// `{"success": false, "message": ...}`, the error shape of every Maps endpoint.
@@ -152,33 +136,10 @@ pub fn fail(ctx: anytype, status: std.http.Status, message: []const u8) !void {
 
 /// Per-IP request budget per minute (search, routing from the map page).
 pub const RateLimiter = struct {
-    lock: Io.Mutex = .init,
-    hits: std.StringHashMapUnmanaged(Entry) = .empty,
-
-    const Entry = struct { count: u32, reset_ms: i64 };
+    inner: http.RateLimiter = .{ .max_keys = 10_000 },
 
     pub fn allow(r: *RateLimiter, ip: []const u8, per_minute: u32) bool {
-        r.lock.lockUncancelable(app.io);
-        defer r.lock.unlock(app.io);
-        const t = nowMs();
-        if (r.hits.getPtr(ip)) |e| {
-            if (e.reset_ms >= t) {
-                e.count += 1;
-                return e.count <= per_minute;
-            }
-            e.* = .{ .count = 1, .reset_ms = t + 60_000 };
-            return true;
-        }
-        if (r.hits.count() > 10_000) r.clear();
-        const key = app.gpa.dupe(u8, ip) catch return true;
-        r.hits.put(app.gpa, key, .{ .count = 1, .reset_ms = t + 60_000 }) catch app.gpa.free(key);
-        return true;
-    }
-
-    fn clear(r: *RateLimiter) void {
-        var it = r.hits.keyIterator();
-        while (it.next()) |k| app.gpa.free(k.*);
-        r.hits.clearRetainingCapacity();
+        return r.inner.allow(app.io, app.gpa, ip, per_minute, 60_000, nowMs());
     }
 };
 

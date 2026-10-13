@@ -126,33 +126,19 @@ fn tokenOf(ctx: *http.Context) ?[]const u8 {
     return ctx.cookie("wufour_token") orelse ctx.cookie("auth_token") orelse ctx.cookie("wufour_session");
 }
 
-/// Asks Wufour whether `token` is a live session.
+/// Asks Wufour whether `token` is a live session (zig-core's wufour.Verifier, cached 30 s).
 fn verify(arena: std.mem.Allocator, token: []const u8) ?User {
-    const body = std.fmt.allocPrint(arena, "{{\"token\":{f}}}", .{std.json.fmt(token, .{})}) catch return null;
-    const url = std.fmt.allocPrint(arena, "{s}/api/auth/verify", .{backendHost(arena)}) catch return null;
-    const res = a_.upstream(arena, .POST, url, body, &.{}) catch return null;
-    const R = struct {
-        success: bool = false,
-        user: ?struct { userId: ?std.json.Value = null, id: ?std.json.Value = null, email: ?[]const u8 = null, username: ?[]const u8 = null, role: ?[]const u8 = null } = null,
-    };
-    const r = std.json.parseFromSliceLeaky(R, arena, res.body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return null;
-    const u = r.user orelse return null;
-    if (!r.success) return null;
-    const id = idText(arena, u.userId) orelse idText(arena, u.id);
-    return .{ .userId = id, .email = u.email orelse u.username, .username = u.username, .role = u.role orelse "user" };
+    const u = a_.app.wufour.verify(arena, token, a_.nowMs()) orelse return null;
+    const id = idText(arena, u.get("userId")) orelse idText(arena, u.get("id"));
+    return .{ .userId = id, .email = u.s("email") orelse u.s("username"), .username = u.s("username"), .role = u.s("role") orelse "user" };
 }
 
-fn idText(arena: std.mem.Allocator, v: ?std.json.Value) ?[]const u8 {
-    return switch (v orelse return null) {
-        .string => |s| s,
-        .integer => |i| std.fmt.allocPrint(arena, "{d}", .{i}) catch null,
+fn idText(arena: std.mem.Allocator, v: mongo.val.Val) ?[]const u8 {
+    return switch (v) {
+        .str => |s| s,
+        .num => |n| if (std.math.isFinite(n)) std.fmt.allocPrint(arena, "{d}", .{@as(i64, @intFromFloat(n))}) catch null else null,
         else => null,
     };
-}
-
-/// wufour-auth swaps "localhost" for 127.0.0.1 in server-to-server calls.
-fn backendHost(arena: std.mem.Allocator) []const u8 {
-    return std.mem.replaceOwned(u8, arena, a_.app.config.auth_host, "localhost", "127.0.0.1") catch a_.app.config.auth_host;
 }
 
 pub fn currentUser(ctx: *http.Context) ?User {
@@ -207,8 +193,7 @@ pub fn callback(ctx: *http.Context) !void {
 /// GET|POST /auth/logout
 pub fn logout(ctx: *http.Context) !void {
     if (ctx.cookie("auth_token") orelse ctx.cookie("wufour_token")) |token| {
-        const body = try std.fmt.allocPrint(ctx.arena, "{{\"token\":{f}}}", .{std.json.fmt(token, .{})});
-        _ = a_.upstream(ctx.arena, .POST, try std.fmt.allocPrint(ctx.arena, "{s}/api/auth/logout", .{backendHost(ctx.arena)}), body, &.{}) catch {};
+        a_.app.wufour.logout(ctx.arena, token);
     }
     try clearCookies(ctx);
     const wants_json = (if (ctx.header("x-requested-with")) |x| std.ascii.eqlIgnoreCase(x, "xmlhttprequest") else false) or

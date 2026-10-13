@@ -203,6 +203,7 @@ pub fn upgrade(ctx: *http.Context) !void {
     if (!ok) return reject(ctx, .forbidden);
 
     var socket = try ctx.webSocket();
+    defer socket.deinit();
     var peer: Peer = .{ .socket = &socket };
     const is_driver = std.mem.eql(u8, role, "driver");
     try join(room_id, &peer, is_driver);
