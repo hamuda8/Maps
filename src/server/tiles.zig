@@ -87,7 +87,8 @@ pub fn serve(ctx: *http.Context) !void {
             return send(ctx, tile.body, ct);
         }
         if (tile.status == .not_found and cached == null) return notFound(ctx);
-    } else |_| {}
+        std.log.warn("tile {s}: upstream {d}", .{ url, @backingInt(tile.status) });
+    } else |err| std.log.warn("tile {s}: {t}", .{ url, err });
 
     // Tile server down or slow: an old copy beats a hole in the map.
     if (cached) |c| if (cwd.readFileAlloc(io, c.path, ctx.arena, .limited(4 << 20))) |body| return send(ctx, body, typeOf(c.path)) else |_| {};
