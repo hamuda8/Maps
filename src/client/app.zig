@@ -173,10 +173,14 @@ pub const State = struct {
     nav: ?Nav = null,
     /// Opened with ?nav=1: navigation starts once the route is drawn.
     nav_after_route: bool = false,
+    /// The map position came from the address: a route opened with it keeps that view.
+    from_hash: bool = false,
 };
 
+/// Zoom levels are the engine's (tile zoom), one more than the MapLibre numbers Maps-js used
+/// (MapLibre 13 shows the same streets as tile zoom 14).
 pub fn init() State {
-    return .{ .map = .{ .camera = .{ .center = .{ .lat = 33.5138, .lng = 36.2765 }, .zoom = 13 } } };
+    return .{ .map = .{ .camera = .{ .center = .{ .lat = 33.5138, .lng = 36.2765 }, .zoom = 14 } } };
 }
 
 // ---- Update ------------------------------------------------------------------------------
@@ -190,6 +194,8 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
         .boot => {
             s.embed = embedMode(env.link);
             setLinkBase(s, env.link);
+            // The map position from the address's #zoom/lat/lng[/bearing/pitch], as Maps-js kept it.
+            s.from_hash = restoreHash(s, env.link);
             // A tracking page shows someone else's vehicle: it does not need the viewer's position.
             if (s.embed != .tracking) fx.watchLocation(onLocated);
             restoreFromLink(s, env, fx, arena);
@@ -199,11 +205,11 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
                 else => {},
             }
         },
-        .frame => if (!s.map.step(env.time_ms)) mapStopped(s, fx),
+        .frame => if (!s.map.step(env.time_ms)) mapStopped(s, fx, arena),
         .map => |p| {
             const g = s.map.handle(p);
             if (g.tap) |at| if (s.embed == .full or s.embed == .business) tapMap(s, at, env, fx, arena);
-            if (p.kind == .up or p.kind == .cancel or p.kind == .wheel) if (!s.map.moving()) mapStopped(s, fx);
+            if (p.kind == .up or p.kind == .cancel or p.kind == .wheel) if (!s.map.moving()) mapStopped(s, fx, arena);
         },
         .idle => |seq| if (seq == s.idle_seq and s.embed == .picker) {
             if (s.picker_skip) {
@@ -317,7 +323,7 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
             }
             exitNav(s, fx, arena);
         },
-        .recenter => if (s.live) |p| s.map.flyTo(.{ .center = p, .zoom = 16, .pitch = 0 }, 1200),
+        .recenter => if (s.live) |p| s.map.flyTo(.{ .center = p, .zoom = 17, .pitch = 0 }, 1200),
         .zoom_in => s.map.easeTo(.{ .zoom = @round(s.map.camera.zoom) + 1 }, 250),
         .zoom_out => s.map.easeTo(.{ .zoom = @round(s.map.camera.zoom) - 1 }, 250),
         .north => s.map.easeTo(.{ .bearing = 0, .pitch = 0 }, 400),
@@ -352,7 +358,8 @@ fn embedMode(link_in: []const u8) Embed {
 }
 
 /// After a pan, zoom or flight: the picker names the place under its pin 400 ms later.
-fn mapStopped(s: *State, fx: zui.Fx(Msg)) void {
+fn mapStopped(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    updateLink(s, fx, arena);
     if (s.embed != .picker) return;
     s.idle_seq +%= 1;
     fx.after(400, .{ .idle = s.idle_seq });
@@ -421,7 +428,7 @@ fn moveVehicle(s: *State, at: LatLng, heading: f64) void {
     const first = s.track.vehicle == null;
     s.track.vehicle = at;
     s.track.heading = heading;
-    if (first) s.map.flyTo(.{ .center = at, .zoom = 16 }, 1200) else s.map.easeTo(.{ .center = at }, 1000);
+    if (first) s.map.flyTo(.{ .center = at, .zoom = 17 }, 1200) else s.map.easeTo(.{ .center = at }, 1000);
     // The route behind the vehicle is no longer drawn.
     if (s.route) |r| {
         var best: usize = 0;
@@ -527,7 +534,7 @@ fn pickPlace(s: *State, f: Field, label: []const u8, at: LatLng, env: zui.Env, f
             s.dest = at;
             startFromLive(s);
             drawRoute(s, fx, arena, .{});
-            if (s.start == null) s.map.flyTo(.{ .center = at, .zoom = 16 }, 1200);
+            if (s.start == null) s.map.flyTo(.{ .center = at, .zoom = 17 }, 1200);
         },
         .start => {
             s.start_text.set(label);
@@ -543,7 +550,7 @@ fn pickPlace(s: *State, f: Field, label: []const u8, at: LatLng, env: zui.Env, f
         .picker => {
             s.picker_text.set(label);
             s.picker_skip = true;
-            s.map.flyTo(.{ .center = at, .zoom = 16 }, 1200);
+            s.map.flyTo(.{ .center = at, .zoom = 17 }, 1200);
         },
     }
     _ = env;
@@ -577,7 +584,7 @@ fn useLocation(s: *State, f: Field, env: zui.Env, fx: zui.Fx(Msg), arena: std.me
             s.start = p;
             s.start_live = true;
             s.start_text.set(t("Your Location"));
-            s.map.flyTo(.{ .center = p, .zoom = 16 }, 1200);
+            s.map.flyTo(.{ .center = p, .zoom = 17 }, 1200);
             fx.focus(key_dest);
         },
         .start => {
@@ -591,7 +598,7 @@ fn useLocation(s: *State, f: Field, env: zui.Env, fx: zui.Fx(Msg), arena: std.me
             s.dest_text.set(t("Your Location"));
             drawRoute(s, fx, arena, .{});
         },
-        .picker => s.map.flyTo(.{ .center = p, .zoom = 16 }, 1200),
+        .picker => s.map.flyTo(.{ .center = p, .zoom = 17 }, 1200),
     }
 }
 
@@ -628,7 +635,7 @@ fn located(s: *State, l: zui.Location, env: zui.Env, fx: zui.Fx(Msg), arena: std
             s.gps = .ok;
             if (s.embed == .picker and !s.picker_located) {
                 s.picker_located = true;
-                s.map.flyTo(.{ .center = p, .zoom = 16 }, 1200);
+                s.map.flyTo(.{ .center = p, .zoom = 17 }, 1200);
                 return;
             }
             if (s.waiting_for_gps) |f| {
@@ -754,7 +761,7 @@ fn startNav(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
     s.nav = .{};
     s.list_for = null;
     fx.speak(zui.i18n.tf(arena, "Starting route to {name}", .{ .name = shortName(s.dest_text.get()) }));
-    s.map.easeTo(.{ .center = from, .zoom = 18, .pitch = 60 }, 1500);
+    s.map.easeTo(.{ .center = from, .zoom = 19, .pitch = 60 }, 1500);
     updateLink(s, fx, arena);
 }
 
@@ -812,7 +819,8 @@ fn navigate(s: *State, raw: LatLng, gps_heading: ?f32, fx: zui.Fx(Msg), arena: s
 const route_params = [_][]const u8{ "start", "dest", "startName", "destName", "mode", "nav" };
 
 /// The path and the parameters that are not the route's (an embed keeps its key and track_id).
-fn setLinkBase(s: *State, link: []const u8) void {
+fn setLinkBase(s: *State, link_in: []const u8) void {
+    const link = link_in[0 .. std.mem.indexOfScalar(u8, link_in, '#') orelse link_in.len];
     var out: std.ArrayList(u8) = .initBuffer(&s.link_base);
     const q_at = std.mem.indexOfScalar(u8, link, '?');
     const path = link[0 .. q_at orelse link.len];
@@ -837,19 +845,28 @@ fn setLinkBase(s: *State, link: []const u8) void {
 /// The page address with start=lat,lng&dest=lat,lng&startName=&destName=&mode=<mode>[&nav=1],
 /// as Maps-js keeps it; the path and other parameters stay.
 fn updateLink(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
-    const base = s.link_base[0..s.link_base_len];
+    const base_only = s.link_base[0..s.link_base_len];
+    const c = s.map.camera;
+    // MapLibre's numbers (zoom one lower than the engine's), so old links keep working.
+    const hash = (if (c.bearing != 0 or c.pitch != 0)
+        std.fmt.allocPrint(arena, "#{d:.2}/{d:.5}/{d:.5}/{d:.1}/{d:.0}", .{ c.zoom - 1, c.center.lat, c.center.lng, c.bearing, c.pitch })
+    else
+        std.fmt.allocPrint(arena, "#{d:.2}/{d:.5}/{d:.5}", .{ c.zoom - 1, c.center.lat, c.center.lng })) catch "";
+    const base = std.mem.concat(arena, u8, &.{ base_only, hash }) catch base_only;
     const from = s.start orelse return fx.setLink(base);
     const to = s.dest orelse return fx.setLink(base);
-    const sep: []const u8 = if (std.mem.indexOfScalar(u8, base, '?') == null) "?" else "&";
-    const link = std.fmt.allocPrint(arena, "{s}{s}start={d:.6},{d:.6}&dest={d:.6},{d:.6}&startName={s}&destName={s}&mode={t}{s}", .{
-        base,                                             sep,                                              from.lat, from.lng, to.lat, to.lng,
+    const sep: []const u8 = if (std.mem.indexOfScalar(u8, base_only, '?') == null) "?" else "&";
+    const link = std.fmt.allocPrint(arena, "{s}{s}start={d:.6},{d:.6}&dest={d:.6},{d:.6}&startName={s}&destName={s}&mode={t}{s}{s}", .{
+        base_only,                                        sep,                                              from.lat, from.lng, to.lat, to.lng,
         api.encode(arena, s.start_text.get()) catch "", api.encode(arena, s.dest_text.get()) catch "", s.embed,  if (s.nav != null) "&nav=1" else "",
+        hash,
     }) catch return;
     fx.setLink(link);
 }
 
 fn query(link: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
-    const q = link[(std.mem.indexOfScalar(u8, link, '?') orelse return null) + 1 ..];
+    const no_hash = link[0 .. std.mem.indexOfScalar(u8, link, '#') orelse link.len];
+    const q = no_hash[(std.mem.indexOfScalar(u8, no_hash, '?') orelse return null) + 1 ..];
     var it = std.mem.tokenizeScalar(u8, q, '&');
     while (it.next()) |pair| {
         const eq = std.mem.indexOfScalar(u8, pair, '=') orelse pair.len;
@@ -874,6 +891,25 @@ fn percentDecode(s: []const u8, buf: []u8) []const u8 {
         i += 1;
     }
     return buf[0..n];
+}
+
+/// "#13.5/33.51/36.27[/bearing/pitch]" (MapLibre zoom) sets the camera; true when there was one.
+fn restoreHash(s: *State, link: []const u8) bool {
+    const at = std.mem.indexOfScalar(u8, link, '#') orelse return false;
+    var parts: [5]f64 = .{ 0, 0, 0, 0, 0 };
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, link[at + 1 ..], '/');
+    while (it.next()) |p| : (n += 1) {
+        if (n == parts.len) return false;
+        parts[n] = std.fmt.parseFloat(f64, p) catch return false;
+        if (!std.math.isFinite(parts[n])) return false;
+    }
+    if (n < 3 or @abs(parts[1]) > 85 or @abs(parts[2]) > 180) return false;
+    s.map.camera.zoom = std.math.clamp(parts[0] + 1, 1, map.max_zoom);
+    s.map.camera.center = .{ .lat = parts[1], .lng = parts[2] };
+    if (n >= 4) s.map.camera.bearing = parts[3];
+    if (n >= 5) s.map.camera.pitch = std.math.clamp(parts[4], 0, 60);
+    return true;
 }
 
 fn parsePoint(s: []const u8) ?LatLng {
@@ -902,7 +938,7 @@ fn restoreFromLink(s: *State, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.Allo
         s.start_text.set(query(env.link, "startName", &a) orelse t("Start"));
         s.dest_text.set(query(env.link, "destName", &b) orelse t("Destination"));
         s.nav_after_route = if (query(env.link, "nav", &a)) |v| std.mem.eql(u8, v, "1") else false;
-        drawRoute(s, fx, arena, .{});
+        drawRoute(s, fx, arena, .{ .skip_fit = s.from_hash });
         return;
     }
     const q = query(env.link, "q", &a) orelse "";
@@ -916,7 +952,7 @@ fn restoreFromLink(s: *State, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.Allo
         s.dest = at;
         s.dest_text.set(shortName(q));
         s.map.camera.center = at;
-        s.map.camera.zoom = 16;
+        s.map.camera.zoom = 17;
     } else if (q.len > 0) {
         typed(s, .main, q, fx);
         fx.focus(key_main);
@@ -1404,7 +1440,19 @@ test "an embed keeps its path, key and track id in its address" {
     defer D.reset();
     try testing.expect(D.respond("/api/route/valhalla", 200, "{\"trip\":{\"summary\":{\"time\":600,\"length\":4.2},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
     try testing.expect(std.mem.startsWith(u8, zui.host.link.items, "/embed/tracking?track_id=T9&key=K&start=33.500000,36.270000"));
-    try testing.expect(std.mem.endsWith(u8, zui.host.link.items, "&mode=tracking"));
+    try testing.expect(std.mem.indexOf(u8, zui.host.link.items, "&mode=tracking#") != null);
+}
+
+test "the map position lives in the address hash, in MapLibre zoom numbers" {
+    D.startWith(400, 800, "/?start=33.5,36.27&dest=33.52,36.31#15.5/33.51/36.28");
+    defer D.reset();
+    const cam = D.R.appState().map.camera;
+    try testing.expectApproxEqAbs(@as(f64, 16.5), cam.zoom, 1e-9);
+    try testing.expectApproxEqAbs(@as(f64, 33.51), cam.center.lat, 1e-9);
+    // The route opened with a hash keeps that view, and the address keeps the hash.
+    try testing.expect(D.respond("/api/route/valhalla", 200, "{\"trip\":{\"summary\":{\"time\":600,\"length\":4.2},\"legs\":[{\"shape\":\"gvo|~@}pcedAf`Za{l@\",\"maneuvers\":[]}]}}"));
+    try testing.expectApproxEqAbs(@as(f64, 16.5), D.R.appState().map.camera.zoom, 1e-9);
+    try testing.expect(std.mem.endsWith(u8, zui.host.link.items, "&mode=full#15.50/33.51000/36.28000"));
 }
 
 test "opened with a route link" {

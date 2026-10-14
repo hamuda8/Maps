@@ -24,7 +24,8 @@
 <body>
   <script type="module">
     import { start } from '/zui.js';
-    start('/app.wasm');
+    // With the #zoom/lat/lng map position, which the app keeps up to date.
+    start('/app.wasm', document.body, { link: location.pathname + location.search + location.hash });
   </script>
   <script>
     // Installable, and opens offline with the areas already viewed (not inside an embed).
