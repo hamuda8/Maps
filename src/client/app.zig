@@ -1162,13 +1162,14 @@ fn markers(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Marke
     if (s.live) |p| if (s.nav == null) {
         list.append(a, .{ .at = p, .size = 14, .color = c.brand, .halo = true, .key = zui.key("live") }) catch {};
     };
-    if (s.start) |p| {
+    // Tracking shows the vehicle, not where its route started (as Maps-js).
+    if (s.embed != .tracking) if (s.start) |p| {
         if (s.nav) |n| {
             list.append(a, .{ .at = p, .icon = icons.arrow, .size = 36, .color = zui.Color.white, .outline = c.brand, .border_width = 2, .heading = n.heading, .key = zui.key("start") }) catch {};
         } else if (!s.start_live or s.live == null) {
             list.append(a, .{ .at = p, .size = 14, .color = zui.Color.white, .border_color = c.brand, .border_width = 3, .key = zui.key("start") }) catch {};
         }
-    }
+    };
     if (s.dest) |p| list.append(a, .{ .at = p, .icon = icons.pin, .size = 36, .color = c.danger, .outline = zui.Color.white, .border_width = 1.5, .anchor = .bottom, .key = zui.key("dest") }) catch {};
     if (s.track.vehicle) |p| list.append(a, .{
         .at = p,
