@@ -284,7 +284,13 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
             }
             const target = textOf(s, which);
             // Only if the user has not typed something else meanwhile.
-            if (std.mem.eql(u8, target.get(), t("Locating pin..."))) target.set(name orelse t("Dropped Pin"));
+            if (std.mem.eql(u8, target.get(), t("Locating pin..."))) {
+                target.set(name orelse t("Dropped Pin"));
+            } else if (name) |n| {
+                // A route link without names: "Start" and "Destination" until the places are named.
+                const fallback = if (which == .start) t("Start") else t("Destination");
+                if (std.mem.eql(u8, target.get(), fallback)) target.set(n);
+            }
             updateLink(s, fx, arena);
         },
         .located => |l| located(s, l, env, fx, arena),
@@ -600,6 +606,12 @@ fn useLocation(s: *State, f: Field, env: zui.Env, fx: zui.Fx(Msg), arena: std.me
         },
         .picker => s.map.flyTo(.{ .center = p, .zoom = 17 }, 1200),
     }
+}
+
+/// Names the place at a route end (the answer lands in .reversed).
+fn lookUpName(s: *State, f: Field, at: LatLng, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    const url = api.reverseUrl(arena, at, zui.i18n.language()) catch return;
+    fx.fetch(.{ .url = url, .tag = (s.reverse_seq << 2) | @intFromEnum(f) }, onReversed);
 }
 
 /// A tap on the map sets the start, then the destination (Maps-js behaviour).
@@ -935,8 +947,14 @@ fn restoreFromLink(s: *State, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.Allo
         s.start = from;
         s.dest = to;
         s.screen = .routing;
-        s.start_text.set(query(env.link, "startName", &a) orelse t("Start"));
-        s.dest_text.set(query(env.link, "destName", &b) orelse t("Destination"));
+        s.start_text.set(query(env.link, "startName", &a) orelse name: {
+            lookUpName(s, .start, from, fx, arena);
+            break :name t("Start");
+        });
+        s.dest_text.set(query(env.link, "destName", &b) orelse name: {
+            lookUpName(s, .dest, to, fx, arena);
+            break :name t("Destination");
+        });
         s.nav_after_route = if (query(env.link, "nav", &a)) |v| std.mem.eql(u8, v, "1") else false;
         drawRoute(s, fx, arena, .{ .skip_fit = s.from_hash });
         return;
@@ -972,6 +990,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
     ui.begin(.{ .width = .fill, .height = .fill }, .{});
     map.draw(Msg, ui, &m, .{
         .tile_url = tile_url,
+        .attribution = "© OpenStreetMap contributors",
         .on_pointer = onMap,
         .routes = routeLines(s, ui),
         .markers = markers(s, ui, c),
@@ -1284,8 +1303,8 @@ fn mapButtons(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors, wide: bool) vo
     if (turned) squareButton(ui, c, .north, null, "N");
     squareButton(ui, c, .tilt, null, if (s.map.camera.pitch > 0) "2D" else "3D");
     if (wide) {
-        squareButton(ui, c, .zoom_in, null, "+");
-        squareButton(ui, c, .zoom_out, null, "−");
+        squareButton(ui, c, .zoom_in, icons.plus, "");
+        squareButton(ui, c, .zoom_out, icons.minus, "");
     }
     squareButton(ui, c, .recenter, icons.locate, "");
 }
@@ -1460,6 +1479,17 @@ test "opened with a route link" {
     defer D.reset();
     try testing.expect(D.pending("/api/route/valhalla") != null);
     try testing.expect(D.findText("Calculating route...") != 0);
+    try testing.expect(D.pending("/api/v1/reverse") == null); // named already
+}
+
+test "a route link without names looks the places up" {
+    D.startWith(400, 800, "/?start=33.5,36.27&dest=33.52,36.31");
+    defer D.reset();
+    try testing.expectEqualStrings("Destination", D.R.appState().dest_text.get());
+    try testing.expect(D.respond("lat=33.52", 200, "{\"success\":true,\"place\":{\"name\":\"Umayyad Mosque\"}}"));
+    try testing.expectEqualStrings("Umayyad Mosque", D.R.appState().dest_text.get());
+    try testing.expect(D.respond("lat=33.5", 500, "{}"));
+    try testing.expectEqualStrings("Start", D.R.appState().start_text.get());
 }
 
 test "picker: names the place under the pin and sends it to the page" {

@@ -205,7 +205,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
     for (s.lines.items) |l| routes.append(ui.arena(), .{ .points = l.points, .color = l.color, .width = l.width, .opacity = l.opacity, .dash = l.dash }) catch {};
     ui.begin(.{ .width = .fill, .height = .fill }, .{});
     const tiles = std.fmt.allocPrint(ui.arena(), "{s}{s}", .{ s.server[0..s.server_len], tile_path }) catch return;
-    map.draw(Msg, ui, &m, .{ .tile_url = tiles, .on_pointer = onMap, .routes = routes.items });
+    map.draw(Msg, ui, &m, .{ .tile_url = tiles, .on_pointer = onMap, .routes = routes.items, .attribution = "© OpenStreetMap contributors" });
     ui.end();
 }
 

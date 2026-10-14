@@ -26,3 +26,6 @@ pub const arrived: Icon = .{ .paths = &.{ circle(12, 12, 9), "M8 12.5l3 3 5-6" }
 pub const arrow: Icon = .{ .paths = &.{"M12 2L21 20L12 16.5L3 20Z"}, .fill = true };
 /// The destination pin (Maps-js's), tip at the bottom.
 pub const pin: Icon = .{ .paths = &.{"M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"}, .fill = true };
+/// The zoom buttons (MapLibre's bold plus and minus).
+pub const plus: Icon = .{ .paths = &.{"M12 5v14M5 12h14"}, .stroke = 3 };
+pub const minus: Icon = .{ .paths = &.{"M5 12h14"}, .stroke = 3 };
