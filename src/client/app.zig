@@ -1002,6 +1002,11 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
     m.setViewport(ui.env.width, ui.env.height);
     if (m.moving()) ui.requestFrame(.frame);
     const wide = ui.env.width >= 768;
+    // Back (Android, the browser, the iOS swipe) leaves navigation, then the directions. Not in
+    // embeds: their page owns the history.
+    if (s.embed == .full or s.embed == .business) {
+        if (s.nav != null) ui.onBack(.exit_nav) else if (s.screen == .routing) ui.onBack(.back);
+    }
 
     ui.begin(.{ .width = .fill, .height = .fill }, .{});
     map.draw(Msg, ui, &m, .{
@@ -1473,8 +1478,11 @@ test "search, pick a place, route from the live position, navigate" {
     D.locate(33.50097, 36.29836); // on the route, about 190 m before the turn
     try testing.expect(D.findText("Turn right onto Baghdad Street.") != 0);
     try testing.expect(std.mem.startsWith(u8, zui.host.spoken.items, "In 200 meters, Turn right"));
-    try D.press("Exit");
+    _ = D.R.back(); // Back leaves navigation first, then the directions
     try testing.expect(D.findText("Exit") == 0);
+    try testing.expect(D.R.appState().screen == .routing and D.R.appState().nav == null);
+    _ = D.R.back();
+    try testing.expect(D.R.appState().screen == .search);
 }
 
 test "a tap on the live dot offers Update Location, which recentres" {
