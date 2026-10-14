@@ -175,6 +175,8 @@ pub const State = struct {
     nav_after_route: bool = false,
     /// The map position came from the address: a route opened with it keeps that view.
     from_hash: bool = false,
+    /// The live dot was tapped: "Update Location" shows above it (Maps-js's popup).
+    dot_menu: bool = false,
 };
 
 /// Zoom levels are the engine's (tile zoom), one more than the MapLibre numbers Maps-js used
@@ -329,7 +331,10 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
             }
             exitNav(s, fx, arena);
         },
-        .recenter => if (s.live) |p| s.map.flyTo(.{ .center = p, .zoom = 17, .pitch = 0 }, 1200),
+        .recenter => {
+            s.dot_menu = false;
+            if (s.live) |p| s.map.flyTo(.{ .center = p, .zoom = 17, .pitch = 0 }, 1200);
+        },
         .zoom_in => s.map.easeTo(.{ .zoom = @round(s.map.camera.zoom) + 1 }, 250),
         .zoom_out => s.map.easeTo(.{ .zoom = @round(s.map.camera.zoom) - 1 }, 250),
         .north => s.map.easeTo(.{ .bearing = 0, .pitch = 0 }, 400),
@@ -618,8 +623,15 @@ fn lookUpName(s: *State, f: Field, at: LatLng, fx: zui.Fx(Msg), arena: std.mem.A
 fn tapMap(s: *State, at: [2]f64, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
     if (s.nav != null) return;
     const v = s.map.view();
-    // Taps on the live dot are not pins.
-    if (s.live) |p| if (v.toScreen(p)) |dot| if (std.math.hypot(dot[0] - at[0], dot[1] - at[1]) < 40) return;
+    // A tap on the live dot opens (or closes) its "Update Location" button; it is not a pin.
+    if (s.live) |p| if (v.toScreen(p)) |dot| if (std.math.hypot(dot[0] - at[0], dot[1] - at[1]) < 40) {
+        s.dot_menu = !s.dot_menu;
+        return;
+    };
+    if (s.dot_menu) {
+        s.dot_menu = false;
+        return;
+    }
     const where = v.toMap(at[0], at[1]) orelse return;
     const target: Field = if (s.start_text.len == 0) .start else if (s.dest_text.len == 0) .dest else return;
     s.screen = .routing;
@@ -996,6 +1008,16 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         .markers = markers(s, ui, c),
     });
 
+    if (s.dot_menu and s.nav == null) if (s.live) |p| if (m.view().toScreen(p)) |dot| {
+        // Centred above the dot.
+        const w: f32 = 170;
+        const left = @as(f32, @floatCast(dot[0])) - w / 2;
+        ui.begin(.{ .position = .absolute, .inset = .{ .start = if (ui.env.rtl) ui.env.width - left - w else left, .top = @as(f32, @floatCast(dot[1])) - 64 }, .width = .{ .px = w }, .align_items = .center }, .{ .key = zui.key("dot-menu") });
+        ui.begin(.{ .padding = .xy(16, 10), .radius = 20, .background = zui.Color.hex("#0f172a"), .pressed_background = c.brand }, .{ .on_press = .recenter });
+        ui.text(t("Update Location"), .{ .font_size = 14, .weight = 600, .color = zui.Color.white });
+        ui.end();
+        ui.end();
+    };
     if (s.nav) |n| {
         navOverlay(s, n, ui, c);
     } else if (s.embed == .picker) {
@@ -1430,6 +1452,19 @@ test "search, pick a place, route from the live position, navigate" {
     try testing.expect(std.mem.startsWith(u8, zui.host.spoken.items, "In 200 meters, Turn right"));
     try D.press("Exit");
     try testing.expect(D.findText("Exit") == 0);
+}
+
+test "a tap on the live dot offers Update Location, which recentres" {
+    D.start(400, 800);
+    defer D.reset();
+    D.locate(33.5138, 36.2765); // the map's centre
+    D.pointer(.{ .kind = .down, .id = 1, .x = 200, .y = 400, .time_ms = 0 });
+    D.pointer(.{ .kind = .up, .id = 1, .x = 200, .y = 400, .time_ms = 80 });
+    try testing.expect(D.findText("Update Location") != 0);
+    try testing.expect(D.R.appState().start == null); // not a pin
+    try D.press("Update Location");
+    try testing.expect(D.findText("Update Location") == 0);
+    try testing.expect(D.R.appState().map.animation != null);
 }
 
 test "a slow answer for an old route does not replace the new one" {
