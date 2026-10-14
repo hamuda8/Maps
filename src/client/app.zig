@@ -210,7 +210,8 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
         .frame => if (!s.map.step(env.time_ms)) mapStopped(s, fx, arena),
         .map => |p| {
             const g = s.map.handle(p);
-            if (g.tap) |at| if (s.embed == .full or s.embed == .business) tapMap(s, at, env, fx, arena);
+            // The second tap of a double tap zooms (the map does it) and drops no pin.
+            if (g.tap) |at| if (g.double_tap == null and (s.embed == .full or s.embed == .business)) tapMap(s, at, env, fx, arena);
             if (p.kind == .up or p.kind == .cancel or p.kind == .wheel) if (!s.map.moving()) mapStopped(s, fx, arena);
         },
         .idle => |seq| if (seq == s.idle_seq and s.embed == .picker) {
