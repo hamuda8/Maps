@@ -19,13 +19,56 @@
     }
     html, body { margin: 0; height: 100%; }
     body { font-family: var(--zui-font); -webkit-text-size-adjust: 100%; }
+    /* The live sandbox: the chosen embed in a frame over the console (zui has no frames). */
+    #preview { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.55); padding: 16px; box-sizing: border-box; }
+    #preview.open { display: flex; }
+    #preview .box { width: 100%; max-width: 1000px; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; }
+    #preview .bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #e2e8f0; }
+    #preview .note { flex: 1; font-size: 14px; color: #64748b; min-width: 0; }
+    #preview .note.ok { color: #16a34a; font-weight: 600; }
+    #preview button { border: 0; border-radius: 20px; padding: 8px 18px; font: 600 14px var(--zui-font); background: #0f172a; color: #fff; cursor: pointer; }
+    #preview iframe { width: 100%; height: min(70vh, 600px); border: 0; display: block; background: #e2e8f0; }
   </style>
 </head>
 <body>
   <script type="module">
     import { start } from '/zui.js';
+    // Made here, not in the markup: zui takes over the body when it starts.
+    const box = document.createElement('div');
+    box.id = 'preview';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Live preview');
+    box.innerHTML = '<div class="box"><div class="bar"><span class="note" id="preview-note"></span><button type="button" id="preview-close">Close</button></div><iframe id="preview-frame" title="Live preview" allowfullscreen allow="geolocation"></iframe></div>';
+    const frame = box.querySelector('iframe');
+    const note = box.querySelector('.note');
+    const say = (text, ok) => { note.textContent = text; note.classList.toggle('ok', !!ok); };
+    const close = () => { box.classList.remove('open'); frame.src = 'about:blank'; };
+    box.querySelector('button').addEventListener('click', close);
+    box.addEventListener('click', (e) => { if (e.target === box) close(); });
+    addEventListener('keydown', (e) => { if (e.key === 'Escape' && box.classList.contains('open')) close(); });
+    // What the embed sends its page, shown as the page would receive it.
+    addEventListener('message', (e) => {
+      if (e.source !== frame.contentWindow || !e.data) return;
+      if (e.data.type === 'WUFOUR_LOCATION_SELECTED') say(`Received from the map: ${e.data.address} (${Number(e.data.lat).toFixed(5)}, ${Number(e.data.lng).toFixed(5)})`, true);
+      if (e.data.type === 'WUFOUR_NAVIGATION_EXITED') {
+        say('The driver asked to exit navigation; this page answered WUFOUR_FORCE_EXIT_NAVIGATION.', true);
+        frame.contentWindow.postMessage({ type: 'WUFOUR_FORCE_EXIT_NAVIGATION' }, '*');
+      }
+      if (e.data.type === 'WUFOUR_NAVIGATION_ARRIVED') say('The driver arrived at the destination.', true);
+    });
     // The full address: the snippets point at this server.
-    start('/developers.wasm', document.body, { link: location.href });
+    start('/developers.wasm', document.body, {
+      link: location.href,
+      onPost(text) {
+        const m = JSON.parse(text);
+        if (m.type !== 'WUFOUR_DEV_PREVIEW') return;
+        say('Messages from the map appear here.');
+        if (!box.isConnected) document.body.append(box);
+        frame.src = m.url;
+        box.classList.add('open');
+      },
+    });
   </script>
 </body>
 </html>
