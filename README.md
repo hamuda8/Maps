@@ -59,20 +59,26 @@ working folder.
 | `MAPS_PUBLIC_URL`, `TRUST_PROXY` | | the public address behind the tunnel |
 | `MAPS_PUBLIC_DIR` | `public` | the web build to serve (use `zig-out/web`) |
 
-## Staging
+## Running it (like the npm scripts)
 
-`maps.wreseal.com` runs this server on the dev laptop behind Cloudflare Tunnel:
+| Command | Like | What it does |
+|---|---|---|
+|  |  | builds, then runs on this machine in the window, with  (Ctrl+C stops it) |
+|  |  | builds, then (re)starts maps.wreseal.com in the background with ; logs in  |
+|  | Unknown command: "start"
 
-```
-zig build server -Doptimize=safe
-zig build web -Doptimize=small
-powershell -File tools\staging.ps1
-```
 
-The script copies the build to `zig-out/staging`, takes the settings from
-`..\Maps-js\.env.staging` and starts it on port 5005. Roll back: stop `maps-server.exe` and run
-`npm run staging` in Maps-js.
+Did you mean one of these?
+  npm star # Mark your favorite packages
+  npm stars # View packages marked as favorites
+  npm start # Start a package
+To see a list of supported npm commands, run:
+  npm help | builds the Linux server and pages into  and prints how to run them on Proxmox with  |
 
+All three run  ( does the same).
+Staging runs behind Cloudflare Tunnel on this laptop; it does not survive a restart, so run
+ again after one. Roll back to Node: stop  and run
+ in Maps-js.
 ## Tests
 
 - `zig build test`
