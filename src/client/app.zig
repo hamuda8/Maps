@@ -752,7 +752,7 @@ fn routed(s: *State, r: zui.Response, env: zui.Env, fx: zui.Fx(Msg), arena: std.
                 n.warned = .empty;
                 if (auto) fx.speak(t("Rerouting..."));
             } else if (!skip_fit) {
-                s.map.fitBounds(route.points, fitPadding(env), 900);
+                s.map.fitBounds(route.points, fitPadding(s, env), 900);
             }
             updateLink(s, fx, arena);
             if (s.nav_after_route) {
@@ -771,7 +771,12 @@ fn routeFailed(s: *State, message: []const u8) void {
 }
 
 /// Room around a route for the panels.
-fn fitPadding(env: zui.Env) zui.Insets {
+fn fitPadding(s: *const State, env: zui.Env) zui.Insets {
+    // Embeds: a compact panel at the bottom (driver) or none; the buttons on the end side.
+    if (s.embed != .full and s.embed != .business) {
+        const bottom: f32 = if (s.embed == .driver) 190 else 60;
+        return .{ .top = env.safe.top + 60, .bottom = env.safe.bottom + bottom, .left = if (env.rtl) 80 else 50, .right = if (env.rtl) 50 else 80 };
+    }
     if (env.width >= 768) {
         const side: f32 = 420;
         return .{ .top = env.safe.top + 60, .bottom = 80, .left = if (env.rtl) 60 else side, .right = if (env.rtl) side else 60 };
@@ -1023,15 +1028,26 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
     } else if (s.embed == .picker) {
         pickerOverlay(s, ui, c);
     } else if (s.embed == .tracking) {
-        // The map, the route and the vehicle only.
+        // The map, the route and the vehicle, and zoom buttons for mouse users (as Maps-js's).
+        if (wide) {
+            ui.begin(.{ .position = .absolute, .inset = .{ .end = 10, .bottom = ui.env.safe.bottom + 30 }, .gap = 10 }, .{});
+            mapButtons(s, ui, c, .{ .zoom = true, .tilt = false, .locate = false });
+            ui.end();
+        }
     } else if (s.embed == .driver) {
+        // The map buttons, and the route's time with Start in a compact panel under them.
+        ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 20 }, .gap = 12 }, .{});
+        ui.begin(.{ .align_items = .end, .padding = .{ .end = 10 }, .gap = 10 }, .{});
+        mapButtons(s, ui, c, .{ .zoom = wide });
+        ui.end();
         if (s.route_status != .none) {
-            ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 20 }, .align_items = .center }, .{});
+            ui.begin(.{ .align_items = .center }, .{});
             ui.begin(.{ .width = .{ .px = @min(400, ui.env.width * 0.9) }, .padding = .all(15), .radius = 20, .background = c.panel, .border_width = 1, .border_color = c.line }, .{});
             routeInfo(s, ui, c);
             ui.end();
             ui.end();
         }
+        ui.end();
     } else if (wide) {
         ui.begin(.{
             .position = .absolute,
@@ -1047,13 +1063,13 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         panel(s, ui, c, false);
         ui.end();
         ui.begin(.{ .position = .absolute, .inset = .{ .end = 10, .bottom = ui.env.safe.bottom + 30 }, .gap = 10, .align_items = .end }, .{});
-        mapButtons(s, ui, c, true);
+        mapButtons(s, ui, c, .{ .zoom = true });
         ui.end();
     } else {
         // Phones: a bottom sheet, with the map buttons just above it.
         ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = -24 } }, .{});
         ui.begin(.{ .align_items = .end, .padding = .{ .end = 16, .bottom = 12 }, .gap = 10 }, .{});
-        mapButtons(s, ui, c, false);
+        mapButtons(s, ui, c, .{ .zoom = false });
         ui.end();
         ui.begin(.{
             .padding = .{ .top = 24, .start = 24, .end = 24, .bottom = 24 + 24 + ui.env.safe.bottom },
@@ -1127,6 +1143,11 @@ fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     // The pin's tip marks the centre of the map.
     const pin = 42;
     ui.iconOutlined(icons.pin, pin, c.danger, zui.Color.white, 1.5, .{ .position = .absolute, .inset = .{ .start = ui.env.width / 2 - pin / 2, .top = ui.env.height / 2 - pin } }, zui.key("picker-pin"));
+
+    // Zoom buttons for mouse users and the way back to the position, above Confirm.
+    ui.begin(.{ .position = .absolute, .inset = .{ .end = 10, .bottom = ui.env.safe.bottom + 100 }, .gap = 10 }, .{});
+    mapButtons(s, ui, c, .{ .zoom = ui.env.width >= 768, .tilt = false });
+    ui.end();
 
     ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 30 }, .align_items = .center }, .{});
     ui.begin(.{ .padding = .xy(40, 14), .radius = 30, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .confirm_place });
@@ -1320,15 +1341,17 @@ fn routeInfo(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     ui.end();
 }
 
-fn mapButtons(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors, wide: bool) void {
+const Buttons = struct { zoom: bool, tilt: bool = true, locate: bool = true };
+
+fn mapButtons(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors, o: Buttons) void {
     const turned = s.map.camera.bearing != 0 or s.map.camera.pitch != 0;
     if (turned) squareButton(ui, c, .north, null, "N");
-    squareButton(ui, c, .tilt, null, if (s.map.camera.pitch > 0) "2D" else "3D");
-    if (wide) {
+    if (o.tilt) squareButton(ui, c, .tilt, null, if (s.map.camera.pitch > 0) "2D" else "3D");
+    if (o.zoom) {
         squareButton(ui, c, .zoom_in, icons.plus, "");
         squareButton(ui, c, .zoom_out, icons.minus, "");
     }
-    squareButton(ui, c, .recenter, icons.locate, "");
+    if (o.locate) squareButton(ui, c, .recenter, icons.locate, "");
 }
 
 fn squareButton(ui: *zui.Ui(Msg), c: theme.Colors, msg: Msg, ic: ?zui.Icon, label: []const u8) void {
