@@ -137,16 +137,49 @@
             if (this._app) this._app.send(text); else this._queue.push(text);
         }
 
+        _emit(type, out) {
+            for (const h of this._handlers.slice()) if (h.type === type) h.fn(out);
+        }
+
+        // The engine reports the camera, clicks, movestart and moveend; the other MapLibre events
+        // pages may listen to (load, move, zoomstart/zoom/zoomend, dragstart/drag/dragend) are
+        // made from those, in MapLibre's order.
         _event(e) {
+            const plain = () => ({ originalEvent: this._move && this._move.user ? {} : undefined, target: this.gl });
             if (e.event === 'camera') {
+                const before = this._camera;
                 this._camera = e;
                 for (const m of this._markers) m._place();
+                if (!before) { this._emit('load', { target: this.gl }); return; }
+                const mv = this._move;
+                if (!mv) return;
+                if (e.zoom !== mv.zoom && !mv.zooming) { mv.zooming = true; this._emit('zoomstart', plain()); }
+                if (mv.user && !mv.zooming && !mv.dragging && (e.lat !== mv.lat || e.lng !== mv.lng)) { mv.dragging = true; this._emit('dragstart', plain()); }
+                this._emit('move', plain());
+                if (mv.zooming && e.zoom !== before.zoom) this._emit('zoom', plain());
+                if (mv.dragging) this._emit('drag', plain());
                 return;
             }
-            const out = e.event === 'click'
-                ? { latlng: { lat: e.lat, lng: e.lng }, originalEvent: {} }
-                : { originalEvent: e.user ? {} : undefined, target: this.gl };
-            for (const h of this._handlers) if (h.type === e.event) h.fn(out);
+            if (e.event === 'movestart') {
+                const c = this._camera || {};
+                this._move = { user: e.user, zoom: c.zoom, lat: c.lat, lng: c.lng, zooming: false, dragging: false };
+                this._emit('movestart', plain());
+                return;
+            }
+            if (e.event === 'moveend') {
+                const mv = this._move;
+                const out = plain();
+                this._move = null;
+                if (mv && mv.dragging) this._emit('dragend', out);
+                if (mv && mv.zooming) this._emit('zoomend', out);
+                this._emit('moveend', out);
+                return;
+            }
+            if (e.event === 'click') {
+                // MapLibre closes popups on a map click.
+                for (const m of this._markers) if (m._popup && m._popup.isConnected) m._popup.remove();
+                this._emit('click', { latlng: { lat: e.lat, lng: e.lng }, originalEvent: {} });
+            }
         }
 
         /** Screen point of a coordinate, in the map element's pixels. */
@@ -239,7 +272,7 @@
             return this;
         }
 
-        /** Events: 'click' (receives { latlng }), 'movestart' and 'moveend'. */
+        /** Events: 'click' (receives { latlng }), 'load', 'movestart', 'move', 'moveend', 'zoomstart', 'zoom', 'zoomend', 'dragstart', 'drag', 'dragend'. */
         on(type, fn) {
             this._handlers.push({ type, fn });
             return this;
@@ -330,12 +363,15 @@
                 this._el.setPointerCapture(down.pointerId);
                 this._dragged = false;
                 const start = [down.clientX, down.clientY];
+                // Where on the icon it was taken: that point stays under the pointer (as MapLibre).
+                const box = this._map._el.getBoundingClientRect();
+                const at = this._map._project(this._latlng[0], this._latlng[1]) || [down.clientX - box.left, down.clientY - box.top];
+                const grab = [down.clientX - box.left - at[0], down.clientY - box.top - at[1]];
                 const move = e => {
                     if (!this._dragged && Math.hypot(e.clientX - start[0], e.clientY - start[1]) < 4) return;
                     this._dragged = true;
                     const r = this._map._el.getBoundingClientRect();
-                    // The icon's anchor follows the pointer.
-                    this._latlng = this._map._unproject(e.clientX - r.left, e.clientY - r.top);
+                    this._latlng = this._map._unproject(e.clientX - r.left - grab[0], e.clientY - r.top - grab[1]);
                     this._place();
                 };
                 const up = () => {
@@ -397,13 +433,24 @@
 
         _popupOffset() { return this._icon.anchor[1] + 4; }
 
-        _bubble(className, content) {
+        _bubble(className, content, closable) {
             const outer = document.createElement('div');
             outer.className = `wufour-bubble ${className} maplibregl-popup`;
             const inner = document.createElement('div');
             inner.className = 'maplibregl-popup-content';
             if (content instanceof Node) inner.append(content); else inner.textContent = String(content); // text, never HTML
-            outer.append(inner);
+            if (closable) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'maplibregl-popup-close-button';
+                x.setAttribute('aria-label', 'Close popup');
+                x.textContent = '×';
+                x.addEventListener('click', ev => { ev.stopPropagation(); outer.remove(); });
+                inner.append(x);
+            }
+            const tip = document.createElement('div');
+            tip.className = 'maplibregl-popup-tip';
+            outer.append(inner, tip);
             return outer;
         }
 
@@ -434,7 +481,7 @@
         _togglePopup() {
             if (!this._map) return;
             if (this._popup?.isConnected) { this._popup.remove(); return; }
-            this._popup = this._bubble('wufour-popup', this._popupContent);
+            this._popup = this._bubble('wufour-popup', this._popupContent, true);
             this._map._overlay.append(this._popup);
             this._place();
         }
