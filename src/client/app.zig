@@ -629,10 +629,8 @@ fn tapMap(s: *State, at: [2]f64, env: zui.Env, fx: zui.Fx(Msg), arena: std.mem.A
         s.dot_menu = !s.dot_menu;
         return;
     };
-    if (s.dot_menu) {
-        s.dot_menu = false;
-        return;
-    }
+    // A tap elsewhere closes it and still counts (as a MapLibre popup closing on a map click).
+    s.dot_menu = false;
     const where = v.toMap(at[0], at[1]) orelse return;
     const target: Field = if (s.start_text.len == 0) .start else if (s.dest_text.len == 0) .dest else return;
     s.screen = .routing;
