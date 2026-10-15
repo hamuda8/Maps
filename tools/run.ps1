@@ -1,13 +1,16 @@
 # Builds and runs the Maps server, like the npm scripts of Maps-js:
 #   zig build local        ->  run.ps1 -Mode local       (this machine, Maps-js/.env.local, in this window)
-#   zig build staging      ->  run.ps1 -Mode staging     (maps.wreseal.com, Maps-js/.env.staging, in the background)
+#   zig build staging      ->  run.ps1 -Mode staging     (maps.wreseal.com, Maps-js/.env.staging, in this window;
+#                                                       -Background starts it hidden instead)
 #   zig build production   ->  run.ps1 -Mode production  (the Linux server and pages for Proxmox, in zig-out/production)
 # Settings come from Maps-js's .env file for that mode. Roll back staging to Node: stop maps-server.exe,
 # then `npm run staging` in C:\MProjects\Maps-js.
 
 param(
     [ValidateSet('local', 'staging', 'production')][string]$Mode = 'staging',
-    [string]$Zig = 'C:\Tools\zig-0.17.0\zig.exe'
+    [string]$Zig = 'C:\Tools\zig-0.17.0\zig.exe',
+    # Start staging hidden in the background instead of in this window.
+    [switch]$Background
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -52,9 +55,10 @@ $vars['MAPS_PUBLIC_DIR'] = Join-Path $dir 'web'
 $vars['REGIONS_DIR'] = Join-Path $repo 'regions'
 $vars['TILE_CACHE_DIR'] = Join-Path $dir 'tiles'
 
-if ($Mode -eq 'local') {
+# In this window, like npm run dev / npm run staging: the log shows here and Ctrl+C stops it.
+if (-not $Background) {
     foreach ($k in $vars.Keys) { [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Process') }
-    Write-Output "Maps on this machine (Ctrl+C stops it)"
+    Write-Output "Maps ($Mode) running in this window (Ctrl+C stops it)"
     Push-Location $dir
     try { & $exe } finally { Pop-Location }
     return
