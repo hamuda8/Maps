@@ -159,14 +159,34 @@ fn redirectToLogin(ctx: *http.Context, next: []const u8) !void {
     return ctx.redirect(try std.fmt.allocPrint(ctx.arena, "{s}/auth?returnTo={s}", .{ a_.app.config.auth_host, try http.encode(ctx.arena, callback_url) }));
 }
 
-/// GET /auth: sign in, then the developer console.
+/// GET /auth: sign in, then the developer console, or `?next=` (a page of ours: the map's
+/// account menu signs in with next=/).
 pub fn login(ctx: *http.Context) !void {
-    const token = ctx.cookie("wufour_token") orelse ctx.cookie("auth_token") orelse return redirectToLogin(ctx, "/auth");
+    const next_q = ctx.queryParam("next") orelse "";
+    const next: ?[]const u8 = if (safeNext(next_q)) next_q else null;
+    const token = ctx.cookie("wufour_token") orelse ctx.cookie("auth_token") orelse return redirectToLogin(ctx, next orelse "/auth");
     if (verify(ctx.arena, token) == null) {
         try clearCookies(ctx);
-        return redirectToLogin(ctx, "/auth");
+        return redirectToLogin(ctx, next orelse "/auth");
     }
-    return ctx.redirect("/developers");
+    return ctx.redirect(next orelse "/developers");
+}
+
+/// GET /api/account-menu: the Wufour account menu (zui.account in zig-core) for whoever is signed
+/// in here: the cookie (the web) or Authorization: Bearer (the phone apps). Signed out still has
+/// an answer (sign in, the default apps). It holds the person's name and email: never stored.
+pub fn accountMenu(ctx: *http.Context) !void {
+    const token = tokenOf(ctx) orelse bearerOf(ctx.header("authorization") orelse "");
+    try ctx.setHeader("cache-control", "no-store");
+    const body = a_.app.wufour.accountMenu(ctx.arena, token) orelse return ctx.sendJson(.service_unavailable, .{ .@"error" = "Wufour is not answering right now" });
+    return ctx.send(.ok, "application/json", body);
+}
+
+fn bearerOf(header: []const u8) ?[]const u8 {
+    const h = std.mem.trim(u8, header, " \t");
+    if (h.len < 7 or !std.ascii.eqlIgnoreCase(h[0..7], "bearer ")) return null;
+    const t = std.mem.trim(u8, h[7..], " \t");
+    return if (t.len > 0) t else null;
 }
 
 /// Only our own pages may be the destination after sign-in (no open redirect).

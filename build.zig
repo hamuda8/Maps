@@ -6,6 +6,8 @@ pub fn build(b: *std.Build) void {
     //   adb reverse tcp:5106 tcp:5106  and  zig build android -Dserver=http://127.0.0.1:5106
     const options = b.addOptions();
     options.addOption([]const u8, "server", b.option([]const u8, "server", "Maps server for the phone apps") orelse "https://maps.wreseal.com");
+    // Wufour (accounts): the phones' in-app sign-in from the account menu.
+    options.addOption([]const u8, "auth", b.option([]const u8, "auth", "Wufour (accounts) for sign-in") orelse "https://www.wreseal.com");
 
     core.addApp(b, b.dependency("zig_core", .{}), .{
         .client_config = options.createModule(),

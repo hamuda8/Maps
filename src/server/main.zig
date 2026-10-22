@@ -61,6 +61,7 @@ pub fn main(init: std.process.Init) !void {
     try router.get("/auth", pages.login);
     try router.get("/auth/callback", pages.callback);
     try router.add(null, "/auth/logout", pages.logout);
+    try router.get("/api/account-menu", pages.accountMenu);
     try router.post("/api/init-session", tracking.initSession);
     try router.post("/api/tracking/batch", tracking.batch);
     try router.post("/api/tracking/end", tracking.end);

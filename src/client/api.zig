@@ -7,6 +7,11 @@ const zui = @import("zui");
 const geo = @import("geo.zig");
 
 pub const base = if (zui.platform == .web) "" else @import("app_config").server;
+/// Wufour (accounts), for the phones' in-app sign-in. The web signs in through the server (/auth).
+pub const auth = if (zui.platform == .web) "" else @import("app_config").auth;
+
+/// The Wufour account menu's data (zui.account), from this server.
+pub const account_menu_url = base ++ "/api/account-menu";
 
 /// Percent-encoding for query values (RFC 3986 unreserved characters stay).
 pub fn encode(arena: std.mem.Allocator, s: []const u8) ![]const u8 {

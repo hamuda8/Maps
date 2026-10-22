@@ -96,6 +96,10 @@ pub const Msg = union(enum) {
     zoom_out,
     north,
     tilt,
+    /// The Wufour account menu (zui.account): a press in it, its data, the phones' sign-in.
+    account: zui.account.Action,
+    account_menu: zui.Response,
+    signed_in: zui.WebAuthResult,
 };
 
 const Nav = struct {
@@ -127,6 +131,11 @@ const Tracking = struct {
 pub const State = struct {
     map: map.State,
     embed: Embed = .full,
+    /// The Wufour account menu behind the picture in the search panel (the full map only).
+    account: zui.account.Menu = .{},
+    /// The phones: the Wufour session token (another of our apps' on this phone, or signed in
+    /// here). The web uses the server's cookie.
+    token: ?[]u8 = null,
     /// The opening address without the route parameters (path, key, track_id, ...): the
     /// base of the address the page keeps updated.
     link_base: [512]u8 = undefined,
@@ -200,6 +209,10 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
             s.from_hash = restoreHash(s, env.link);
             // A tracking page shows someone else's vehicle: it does not need the viewer's position.
             if (s.embed != .tracking) fx.watchLocation(onLocated);
+            if (s.embed == .full) {
+                if (zui.platform != .web) s.token = zui.wufour.saved(gpa);
+                loadAccount(s, fx);
+            }
             restoreFromLink(s, env, fx, arena);
             switch (s.embed) {
                 .tracking => startTracking(s, env, fx, arena),
@@ -208,6 +221,18 @@ pub fn update(s: *State, msg: Msg, env: zui.Env, fx: zui.Fx(Msg)) void {
             }
         },
         .frame => if (!s.map.step(env.time_ms)) mapStopped(s, fx, arena),
+        .account => |act| if (s.account.update(Msg, act, fx)) |left| switch (left) {
+            .sign_in => signIn(fx),
+            .sign_out => signOut(s, fx, arena),
+            else => {},
+        },
+        .account_menu => |r| if (r.ok()) s.account.load(r.body),
+        .signed_in => |r| if (zui.wufour.tokenOfResult(gpa, r)) |tok| {
+            zui.wufour.save(tok);
+            if (s.token) |old| gpa.free(old);
+            s.token = tok;
+            loadAccount(s, fx);
+        },
         .map => |p| {
             const g = s.map.handle(p);
             // The second tap of a double tap zooms (the map does it) and drops no pin.
@@ -1087,6 +1112,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         ui.end();
         ui.end();
     }
+    if (s.embed == .full and s.nav == null) zui.account.panel(Msg, ui, &s.account, accountOptions(ui));
     ui.end();
 }
 
@@ -1111,6 +1137,65 @@ fn routeLines(s: *const State, ui: *zui.Ui(Msg)) []const map.Route {
     const out = ui.arena().alloc(map.Route, 1) catch return &.{};
     out[0] = line;
     return out;
+}
+
+// ---- The Wufour account menu --------------------------------------------------------------------
+//
+// The picture at the end of the search panel's title opens zui.account's menu (the same as in
+// every Wufour app): the account, then the person's apps from the Wufour start page.
+
+fn onAccount(a: zui.account.Action) Msg {
+    return .{ .account = a };
+}
+
+fn onAccountMenu(r: zui.Response) Msg {
+    return .{ .account_menu = r };
+}
+
+fn onSignedIn(r: zui.WebAuthResult) Msg {
+    return .{ .signed_in = r };
+}
+
+/// Asks this server for the menu (it asks Wufour): the cookie on the web, the token on the phones.
+fn loadAccount(s: *const State, fx: zui.Fx(Msg)) void {
+    var buf: [4200]u8 = undefined;
+    const tok = s.token orelse return fx.fetch(.{ .url = api.account_menu_url }, onAccountMenu);
+    const h = std.fmt.bufPrint(&buf, "Bearer {s}", .{tok}) catch return;
+    fx.fetch(.{ .url = api.account_menu_url, .headers = &.{.{ "authorization", h }} }, onAccountMenu);
+}
+
+/// The web through the server (/auth, back to the map); the phones inside the app.
+fn signIn(fx: zui.Fx(Msg)) void {
+    if (zui.platform == .web) return fx.openUrl("/auth?next=%2F", false);
+    zui.wufour.signIn(Msg, fx, .{ .auth_host = api.auth, .callback = api.base ++ "/auth/callback", .title = t("Sign in with Wufour") }, onSignedIn);
+}
+
+/// The web through the server (/auth/logout); the phones here, at Wufour and in our other apps.
+fn signOut(s: *State, fx: zui.Fx(Msg), arena: std.mem.Allocator) void {
+    if (zui.platform == .web) return fx.openUrl("/auth/logout", false);
+    if (s.token) |tok| {
+        if (zui.wufour.logoutRequest(arena, api.auth, tok)) |req| fx.fetch(req, onAccountMenuIgnored);
+        gpa.free(tok);
+        s.token = null;
+    }
+    zui.wufour.signOutEverywhere();
+    s.account.deinit();
+    loadAccount(s, fx);
+}
+
+fn onAccountMenuIgnored(_: zui.Response) Msg {
+    return .{ .account = .none };
+}
+
+fn accountOptions(ui: *zui.Ui(Msg)) zui.account.Options(Msg) {
+    const wide = ui.env.width >= 768;
+    return .{
+        .msg = onAccount,
+        .ar = std.mem.eql(u8, zui.i18n.language(), "ar"),
+        .app = "maps",
+        // Under the search panel's title on wide screens; from the top on phones.
+        .anchor = if (wide) .{ .top = ui.env.safe.top + 20 + 76, .start = 20 } else .{ .top = ui.env.safe.top + 12, .start = 8 },
+    };
 }
 
 fn modeIcon(m: api.Mode) zui.Icon {
@@ -1191,7 +1276,10 @@ fn markers(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Marke
 fn panel(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors, phone: bool) void {
     switch (s.screen) {
         .search => {
-            ui.text(t("Wufour Maps"), .{ .font_size = 24, .weight = 700, .color = c.ink });
+            ui.begin(.{ .direction = .row, .align_items = .center, .gap = 12 }, .{});
+            ui.text(t("Wufour Maps"), .{ .grow = 1, .font_size = 24, .weight = 700, .color = c.ink });
+            if (s.embed == .full) zui.account.picture(Msg, ui, &s.account, accountOptions(ui), 36);
+            ui.end();
             if (phone and s.list_for == .main) suggestionList(s, ui, c);
             fieldRow(ui, c, .{ .icon = icons.search }, s.main.get(), t("Navigate Your World..."), key_main, onMain, .main, s.focused == .main);
             if (!phone and s.list_for == .main) suggestionList(s, ui, c);
