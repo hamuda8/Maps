@@ -113,6 +113,9 @@ pub const RouteError = union(enum) {
 /// A Valhalla answer as a route owned by `gpa`, or what went wrong.
 pub fn parseRoute(gpa: std.mem.Allocator, arena: std.mem.Allocator, status: u16, body: []const u8, mode: Mode) union(enum) { ok: Route, err: RouteError } {
     if (status < 200 or status >= 300) {
+        // Our server could not reach the routing service (502 and the other gateway answers):
+        // the translated "Route Unavailable", not the server's English sentence.
+        if (status >= 502 and status <= 504) return .{ .err = .unavailable };
         const e = std.json.parseFromSliceLeaky(struct { error_code: ?i64 = null, @"error": ?[]const u8 = null, message: ?[]const u8 = null }, arena, body, parse_options) catch return .{ .err = .unavailable };
         if (e.error_code == 154) return .{ .err = .{ .message = "Route too long (max 1500 km)" } };
         if (e.@"error" orelse e.message) |m| return .{ .err = .{ .message = m } };

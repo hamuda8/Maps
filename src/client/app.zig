@@ -1095,11 +1095,10 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         mapButtons(s, ui, c, .{ .zoom = true });
         ui.end();
     } else {
-        // Phones: a bottom sheet, with the map buttons just above it.
+        // Phones: a bottom sheet, with the map buttons just above it. The buttons hang off the
+        // sheet as an absolute child: a full-width row above the sheet would take every touch
+        // beside them, so pans there went nowhere and a pinch zoomed the page, not the map.
         ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = -24 } }, .{});
-        ui.begin(.{ .align_items = .end, .padding = .{ .end = 16, .bottom = 12 }, .gap = 10 }, .{});
-        mapButtons(s, ui, c, .{ .zoom = false });
-        ui.end();
         ui.begin(.{
             .padding = .{ .top = 24, .start = 24, .end = 24, .bottom = 24 + 24 + ui.env.safe.bottom },
             .gap = 15,
@@ -1108,6 +1107,11 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
             .border_width = 1,
             .border_color = c.line,
         }, .{});
+        const turned = s.map.camera.bearing != 0 or s.map.camera.pitch != 0;
+        const buttons: f32 = if (turned) 3 else 2; // N when turned, 3D/2D, locate (no zoom on phones)
+        ui.begin(.{ .position = .absolute, .inset = .{ .end = 16, .top = -(buttons * 44 + (buttons - 1) * 10 + 12) }, .gap = 10 }, .{});
+        mapButtons(s, ui, c, .{ .zoom = false });
+        ui.end();
         panel(s, ui, c, true);
         ui.end();
         ui.end();
