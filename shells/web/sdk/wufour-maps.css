@@ -15,7 +15,7 @@
 }
 .wufour-ctrl button {
     width: 29px; height: 29px; border: 0; padding: 0; margin: 0; background: transparent;
-    font: 700 18px/29px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-weight: 700; font-size: 18px; line-height: 29px; font-family: inherit;
     color: #333; cursor: pointer;
 }
 .wufour-ctrl button + button { border-top: 1px solid #ddd; }
@@ -40,6 +40,6 @@
 .wufour-popup .maplibregl-popup-content { padding: 10px 24px 10px 14px; }
 .wufour-popup .maplibregl-popup-close-button {
     position: absolute; top: 0; right: 0; border: 0; background: transparent; padding: 0 6px;
-    font: 16px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #333; cursor: pointer; border-radius: 0 8px 0 0;
+    font-size: 16px; line-height: 22px; font-family: inherit; color: #333; cursor: pointer; border-radius: 0 8px 0 0;
 }
 .wufour-popup .maplibregl-popup-close-button:hover { background: rgba(0, 0, 0, 0.05); }

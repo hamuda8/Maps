@@ -36,6 +36,14 @@ build for real use.
 
 Working on zig-core at the same time: add `--fork=C:/MProjects/zig-core` to any command.
 
+Fonts: the phone apps draw with Wufour Sans and Wufour Arabic from zig-core's `shells/fonts/`
+(`zui/font.zig` has the rule: weight 400/500/700, Arabic text in the Arabic face with the Sans
+filling in, the system font when a file is missing). The APK gets them on its own
+(`assets/fonts/`). On iOS `zig build ios` puts them in `zig-out/ios/fonts/`; the bundle needs those
+six files next to `Info.plist` (listed there under `UIAppFonts`) and the app links `CoreText`. To
+refresh them, copy `..\WufourType\dist\golden\*.ttf` into `..\zig-core\shells\fonts\`, then point
+`build.zig.zon` at the new zig-core commit (or build with `--fork`).
+
 ## Search regions
 
 Search works for any country whose OpenStreetMap extract is in `regions/` (git-ignored). Drop a

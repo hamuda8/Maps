@@ -138,6 +138,8 @@ fn healthz(ctx: *http.Context) !void {
 fn staticFiles(ctx: *http.Context) !void {
     if (ctx.method != .GET and ctx.method != .HEAD) return a_.fail(ctx, .not_found, "Not found");
     if (std.mem.eql(u8, ctx.path, "/sw.js") or std.mem.eql(u8, ctx.path, "/manifest.json")) try ctx.setHeader("cache-control", "no-cache");
+    // Font files carry their version in the name, so they may be kept for a year.
+    if (std.mem.startsWith(u8, ctx.path, "/fonts/") and std.mem.endsWith(u8, ctx.path, ".woff2")) try ctx.setHeader("cache-control", "public, max-age=31536000, immutable");
     return http.serveDir(ctx, a_.app.config.public_dir, false);
 }
 

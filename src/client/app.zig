@@ -1038,7 +1038,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         .tile_url = tile_url,
         .attribution = "© OpenStreetMap contributors",
         .on_pointer = onMap,
-        .routes = routeLines(s, ui),
+        .routes = routeLines(s, ui, c),
         .markers = markers(s, ui, c),
     });
 
@@ -1047,8 +1047,8 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
         const w: f32 = 170;
         const left = @as(f32, @floatCast(dot[0])) - w / 2;
         ui.begin(.{ .position = .absolute, .inset = .{ .start = if (ui.env.rtl) ui.env.width - left - w else left, .top = @as(f32, @floatCast(dot[1])) - 64 }, .width = .{ .px = w }, .align_items = .center }, .{ .key = zui.key("dot-menu") });
-        ui.begin(.{ .padding = .xy(16, 10), .radius = 20, .background = zui.Color.hex("#0f172a"), .pressed_background = c.brand }, .{ .on_press = .recenter });
-        ui.text(t("Update Location"), .{ .font_size = 14, .weight = 600, .color = zui.Color.white });
+        ui.begin(.{ .padding = .xy(16, 10), .radius = 12, .background = c.ink, .pressed_background = c.brand }, .{ .on_press = .recenter });
+        ui.text(t("Update Location"), .{ .font_size = 15, .weight = 700, .color = c.on_ink });
         ui.end();
         ui.end();
     };
@@ -1084,7 +1084,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
             .width = .{ .px = 380 },
             .padding = .all(20),
             .gap = 15,
-            .radius = 16,
+            .radius = 24,
             .background = c.panel,
             .border_width = 1,
             .border_color = c.line,
@@ -1116,7 +1116,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
     ui.end();
 }
 
-fn routeLines(s: *const State, ui: *zui.Ui(Msg)) []const map.Route {
+fn routeLines(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Route {
     const full = s.route orelse return &.{};
     var r = full;
     // Tracking: only the part still ahead of the vehicle, starting at the vehicle.
@@ -1127,7 +1127,7 @@ fn routeLines(s: *const State, ui: *zui.Ui(Msg)) []const map.Route {
         @memcpy(pts[1..], rest);
         r.points = pts;
     };
-    const brand = zui.Color.hex("#2563eb");
+    const brand = c.brand;
     const line: map.Route = switch (s.mode) {
         // Walking dotted, cycling dashed, as Maps-js draws them.
         .walk => .{ .points = r.points, .color = brand, .width = 6, .dash = .{ 0.1, 10 } },
@@ -1212,7 +1212,7 @@ fn modeIcon(m: api.Mode) zui.Icon {
 fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     ui.begin(.{ .position = .absolute, .inset = .{ .top = ui.env.safe.top + 20, .start = 0, .end = 0 }, .align_items = .center }, .{});
     ui.begin(.{ .width = .{ .px = @min(400, ui.env.width * 0.9) }, .gap = 8 }, .{});
-    ui.begin(.{ .direction = .row, .align_items = .center, .gap = 10, .padding = .xy(16, 0), .height = .{ .px = 50 }, .radius = 25, .background = c.field, .border_width = 1, .border_color = c.field_line }, .{ .key = zui.key("picker-row") });
+    ui.begin(.{ .direction = .row, .align_items = .center, .gap = 10, .padding = .xy(16, 0), .height = .{ .px = 50 }, .radius = 12, .background = c.field, .border_width = 1, .border_color = c.field_line }, .{ .key = zui.key("picker-row") });
     ui.icon(icons.pin, 18, c.ink_2, .{}, 0);
     ui.input(.{
         .key = zui.key("picker-input"),
@@ -1221,9 +1221,9 @@ fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
         .on_change = onPicker,
         .on_focus = .{ .focused = .picker },
         .on_blur = .{ .blur_seq = .picker },
-        .style = .{ .grow = 1, .height = .{ .px = 48 }, .font_size = 15, .weight = 500, .color = c.ink },
+        .style = .{ .grow = 1, .height = .{ .px = 48 }, .font_size = 16, .weight = 500, .color = c.ink },
     });
-    if (s.picker_busy) ui.text("…", .{ .font_size = 15, .color = c.brand });
+    if (s.picker_busy) ui.text("…", .{ .font_size = 16, .color = c.brand });
     ui.end();
     if (s.list_for == .picker and s.suggest != .location_only) suggestionList(s, ui, c);
     ui.end();
@@ -1231,7 +1231,7 @@ fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
 
     // The pin's tip marks the centre of the map.
     const pin = 42;
-    ui.iconOutlined(icons.pin, pin, c.danger, zui.Color.white, 1.5, .{ .position = .absolute, .inset = .{ .start = ui.env.width / 2 - pin / 2, .top = ui.env.height / 2 - pin } }, zui.key("picker-pin"));
+    ui.iconOutlined(icons.pin, pin, c.danger, c.on_danger, 1.5, .{ .position = .absolute, .inset = .{ .start = ui.env.width / 2 - pin / 2, .top = ui.env.height / 2 - pin } }, zui.key("picker-pin"));
 
     // Zoom buttons for mouse users and the way back to the position, above Confirm.
     ui.begin(.{ .position = .absolute, .inset = .{ .end = 10, .bottom = ui.env.safe.bottom + 100 }, .gap = 10 }, .{});
@@ -1239,8 +1239,8 @@ fn pickerOverlay(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     ui.end();
 
     ui.begin(.{ .position = .absolute, .inset = .{ .start = 0, .end = 0, .bottom = ui.env.safe.bottom + 30 }, .align_items = .center }, .{});
-    ui.begin(.{ .padding = .xy(40, 14), .radius = 30, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .confirm_place });
-    ui.text(t("Confirm Location"), .{ .font_size = 16, .weight = 700, .color = zui.Color.white });
+    ui.begin(.{ .padding = .xy(40, 14), .radius = 12, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .confirm_place });
+    ui.text(t("Confirm Location"), .{ .font_size = 16, .weight = 700, .color = c.on_accent });
     ui.end();
     ui.end();
 }
@@ -1254,19 +1254,19 @@ fn markers(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) []const map.Marke
     // Tracking shows the vehicle, not where its route started (as Maps-js).
     if (s.embed != .tracking) if (s.start) |p| {
         if (s.nav) |n| {
-            list.append(a, .{ .at = p, .icon = icons.arrow, .size = 36, .color = zui.Color.white, .outline = c.brand, .border_width = 2, .heading = n.heading, .key = zui.key("start") }) catch {};
+            list.append(a, .{ .at = p, .icon = icons.arrow, .size = 36, .color = c.on_accent, .outline = c.brand, .border_width = 2, .heading = n.heading, .key = zui.key("start") }) catch {};
         } else if (!s.start_live or s.live == null) {
-            list.append(a, .{ .at = p, .size = 14, .color = zui.Color.white, .border_color = c.brand, .border_width = 3, .key = zui.key("start") }) catch {};
+            list.append(a, .{ .at = p, .size = 14, .color = c.on_accent, .border_color = c.brand, .border_width = 3, .key = zui.key("start") }) catch {};
         }
     };
-    if (s.dest) |p| list.append(a, .{ .at = p, .icon = icons.pin, .size = 36, .color = c.danger, .outline = zui.Color.white, .border_width = 1.5, .anchor = .bottom, .key = zui.key("dest") }) catch {};
+    if (s.dest) |p| list.append(a, .{ .at = p, .icon = icons.pin, .size = 36, .color = c.danger, .outline = c.on_danger, .border_width = 1.5, .anchor = .bottom, .key = zui.key("dest") }) catch {};
     if (s.track.vehicle) |p| list.append(a, .{
         .at = p,
         .icon = modeIcon(s.track.mode),
         .size = 40,
         .icon_size = 24,
-        .color = zui.Color.hex("#2563eb"),
-        .badge = zui.Color.white,
+        .color = c.brand,
+        .badge = c.on_accent,
         .heading = s.track.heading,
         .key = zui.key("vehicle"),
     }) catch {};
@@ -1311,7 +1311,7 @@ fn fieldRow(ui: *zui.Ui(Msg), c: theme.Colors, lead: Lead, value: []const u8, pl
         .gap = 8,
         .padding = .xy(12, 0),
         .height = .{ .px = 48 },
-        .radius = 8,
+        .radius = 12,
         .background = c.field,
         .border_width = 1,
         .border_color = if (focused) c.brand else c.field_line,
@@ -1337,7 +1337,7 @@ fn fieldRow(ui: *zui.Ui(Msg), c: theme.Colors, lead: Lead, value: []const u8, pl
         .on_change = on_change,
         .on_focus = .{ .focused = f },
         .on_blur = .{ .blur_seq = f },
-        .style = .{ .grow = 1, .height = .{ .px = 46 }, .font_size = 15, .color = c.ink },
+        .style = .{ .grow = 1, .height = .{ .px = 48 }, .font_size = 16, .color = c.ink },
     });
     ui.end();
 }
@@ -1354,7 +1354,7 @@ fn suggestionList(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     if (!other_is_live) {
         ui.begin(.{ .direction = .row, .gap = 8, .align_items = .center, .padding = .xy(16, 14), .pressed_background = c.soft }, .{ .on_press = .picked_location, .key = zui.key("your-location") });
         ui.icon(icons.locate, 16, c.brand, .{}, 0);
-        ui.text(t("Your Location"), .{ .font_size = 15, .weight = 700, .color = c.brand });
+        ui.text(t("Your Location"), .{ .font_size = 16, .weight = 700, .color = c.brand });
         ui.end();
     }
     switch (s.suggest) {
@@ -1366,7 +1366,7 @@ fn suggestionList(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     }
     if (s.suggest == .results or s.suggest == .loading) for (s.suggestions.items, 0..) |sug, i| {
         ui.begin(.{ .padding = .xy(16, 14), .border_width = 0, .pressed_background = c.soft }, .{ .on_press = .{ .picked = i }, .key = zui.key(i + 1) });
-        ui.text(sug.label, .{ .font_size = 15, .weight = 500, .color = c.ink, .max_lines = 2 });
+        ui.text(sug.label, .{ .font_size = 16, .weight = 500, .color = c.ink, .max_lines = 2, .line_height = 1.5 });
         ui.end();
     };
     ui.end();
@@ -1374,7 +1374,7 @@ fn suggestionList(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
 
 fn note(ui: *zui.Ui(Msg), c: theme.Colors, text: []const u8) void {
     ui.begin(.{ .padding = .xy(16, 14) }, .{});
-    ui.text(text, .{ .font_size = 15, .color = c.ink_2 });
+    ui.text(text, .{ .font_size = 16, .color = c.ink_2, .line_height = 1.5 });
     ui.end();
 }
 
@@ -1384,7 +1384,7 @@ fn iconButton(ui: *zui.Ui(Msg), c: theme.Colors, ic: zui.Icon, msg: Msg, size: f
         .height = .{ .px = size },
         .align_items = .center,
         .justify = .center,
-        .radius = if (round) size / 2 else 6,
+        .radius = if (round) size / 2 else 12,
         .background = if (round) c.field else null,
         .border_width = if (round) 1 else 0,
         .border_color = c.line,
@@ -1402,7 +1402,7 @@ fn transportModes(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
             .grow = 1,
             .align_items = .center,
             .padding = .all(8),
-            .radius = 8,
+            .radius = 12,
             .background = if (active) c.brand_soft else null,
             .pressed_background = c.soft,
         }, .{ .on_press = .{ .mode = entry[0] } });
@@ -1414,19 +1414,19 @@ fn transportModes(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
 
 fn routeInfo(s: *const State, ui: *zui.Ui(Msg), c: theme.Colors) void {
     if (s.route_status == .none) return;
-    ui.begin(.{ .padding = .all(16), .radius = 12, .background = c.soft, .border_width = 1, .border_color = c.line, .gap = 12 }, .{});
+    ui.begin(.{ .padding = .all(16), .radius = 18, .background = c.soft, .border_width = 1, .border_color = c.line, .gap = 12 }, .{});
     switch (s.route_status) {
         .none => {},
         .loading => ui.text(t("Calculating route..."), .{ .font_size = 18, .weight = 700, .color = c.ink, .text_align = .center }),
-        .failed => ui.text(s.route_error.get(), .{ .font_size = 15, .color = c.danger, .text_align = .center }),
+        .failed => ui.text(s.route_error.get(), .{ .font_size = 16, .color = c.danger, .text_align = .center, .line_height = 1.5 }),
         .ok => if (s.route) |r| {
             ui.begin(.{ .direction = .row, .justify = .center, .align_items = .center, .gap = 6 }, .{});
             ui.text(duration(ui, r.seconds), .{ .font_size = 18, .weight = 700, .color = c.ink });
             ui.text(ui.tf("({n} km)", .{ .n = km(ui, r.km) }), .{ .font_size = 18, .color = c.ink_2 });
             ui.end();
             if (s.start_live or s.embed == .driver) {
-                ui.begin(.{ .align_items = .center, .padding = .xy(20, 12), .radius = 24, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .start_nav });
-                ui.text(t("Start"), .{ .font_size = 15, .weight = 600, .color = zui.Color.white });
+                ui.begin(.{ .align_items = .center, .padding = .xy(20, 12), .radius = 12, .background = c.brand, .pressed_opacity = 0.85 }, .{ .on_press = .start_nav });
+                ui.text(t("Start"), .{ .font_size = 15, .weight = 700, .color = c.on_accent });
                 ui.end();
             }
         },
@@ -1453,7 +1453,7 @@ fn squareButton(ui: *zui.Ui(Msg), c: theme.Colors, msg: Msg, ic: ?zui.Icon, labe
         .height = .{ .px = 44 },
         .align_items = .center,
         .justify = .center,
-        .radius = 8,
+        .radius = 12,
         .background = c.field,
         .border_width = 1,
         .border_color = c.line,
@@ -1464,10 +1464,10 @@ fn squareButton(ui: *zui.Ui(Msg), c: theme.Colors, msg: Msg, ic: ?zui.Icon, labe
 }
 
 fn navOverlay(s: *const State, n: Nav, ui: *zui.Ui(Msg), c: theme.Colors) void {
-    const white = zui.Color.white;
+    const on_nav = c.on_nav;
     // The next turn, at the top.
     ui.begin(.{ .position = .absolute, .inset = .{ .top = ui.env.safe.top + 10, .start = 20, .end = 20 }, .align_items = .center }, .{});
-    ui.begin(.{ .direction = .row, .align_items = .center, .gap = 16, .padding = .xy(20, 16), .radius = 12, .background = c.nav, .max_width = 400, .width = .fill }, .{});
+    ui.begin(.{ .direction = .row, .align_items = .center, .gap = 16, .padding = .xy(20, 16), .radius = 18, .background = c.nav, .max_width = 400, .width = .fill }, .{});
     var dist_text: []const u8 = "-- m";
     var instruction: []const u8 = t("Head straight");
     var ic = icons.straight;
@@ -1486,24 +1486,24 @@ fn navOverlay(s: *const State, n: Nav, ui: *zui.Ui(Msg), c: theme.Colors) void {
             .straight => icons.straight,
         };
     };
-    ui.icon(ic, 28, white, .{}, 0);
+    ui.icon(ic, 28, on_nav, .{}, 0);
     ui.begin(.{ .grow = 1, .gap = 4 }, .{});
-    ui.text(dist_text, .{ .font_size = 24, .weight = 700, .color = white });
-    ui.text(instruction, .{ .font_size = 16, .weight = 500, .color = white, .line_height = 1.2 });
+    ui.text(dist_text, .{ .font_size = 24, .weight = 700, .color = on_nav });
+    ui.text(instruction, .{ .font_size = 16, .weight = 500, .color = on_nav, .line_height = 1.3 });
     ui.end();
     ui.end();
     ui.end();
 
     // Time, distance and Exit at the bottom.
     ui.begin(.{ .position = .absolute, .inset = .{ .bottom = ui.env.safe.bottom + 20, .start = 20, .end = 20 }, .direction = .row, .justify = .space_between, .align_items = .end, .gap = 10 }, .{});
-    ui.begin(.{ .direction = .row, .gap = 12, .align_items = .end, .padding = .xy(24, 12), .radius = 12, .background = c.nav_2 }, .{});
+    ui.begin(.{ .direction = .row, .gap = 12, .align_items = .end, .padding = .xy(24, 12), .radius = 18, .background = c.nav_2 }, .{});
     if (s.route) |r| {
-        ui.text(duration(ui, r.seconds), .{ .font_size = 24, .weight = 700, .color = white });
-        ui.text(ui.tf("{n} km", .{ .n = km(ui, r.km) }), .{ .font_size = 16, .weight = 500, .color = white.withAlpha(0.9) });
+        ui.text(duration(ui, r.seconds), .{ .font_size = 24, .weight = 700, .color = on_nav });
+        ui.text(ui.tf("{n} km", .{ .n = km(ui, r.km) }), .{ .font_size = 16, .weight = 500, .color = on_nav.withAlpha(0.9) });
     }
     ui.end();
-    ui.begin(.{ .padding = .xy(24, 12), .radius = 24, .background = c.danger, .pressed_opacity = 0.85 }, .{ .on_press = .exit_nav });
-    ui.text(t("Exit"), .{ .font_size = 16, .weight = 700, .color = white });
+    ui.begin(.{ .padding = .xy(24, 12), .radius = 12, .background = c.danger, .pressed_opacity = 0.85 }, .{ .on_press = .exit_nav });
+    ui.text(t("Exit"), .{ .font_size = 16, .weight = 700, .color = c.on_danger });
     ui.end();
     ui.end();
 }
@@ -1527,6 +1527,11 @@ fn metres(ui: *zui.Ui(Msg), m: f64) []const u8 {
 
 const D = zui.host.Driver(@This());
 const testing = std.testing;
+
+test {
+    // The palette and its derived dark theme (theme.zig).
+    _ = theme;
+}
 
 test "search, pick a place, route from the live position, navigate" {
     D.start(400, 800);

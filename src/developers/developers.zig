@@ -15,19 +15,91 @@ comptime {
 const gpa = zui.allocator;
 const Color = zui.Color;
 
-const c = struct {
-    const page = Color.hex("#f8fafc");
-    const card = Color.hex("#ffffff");
-    const ink = Color.hex("#0f172a");
-    const ink_2 = Color.hex("#64748b");
-    const line = Color.hex("#e2e8f0");
-    const brand = Color.hex("#2563eb");
-    const brand_soft = Color.hex("#e0e7ff");
-    const danger = Color.hex("#ef4444");
-    const code_bg = Color.hex("#0f172a");
-    const code_ink = Color.hex("#38bdf8");
-    const key_bg = Color.hex("#e0e7ff");
+// ---- Colours ------------------------------------------------------------------------------
+// The ten TwOP roles of Wufour's apps.js (`maps.colors`) and the OKLCH dark transforms of
+// Wufour's style.css, as in src/client/theme.zig, which is the source: this page is its own
+// module and cannot import that file, so change both together. Every colour on the page is a
+// role or a role with alpha.
+
+const base = Color.hex("#ffffff");
+const core = Color.hex("#0f172a");
+const accent = Color.hex("#2563eb");
+const variant = Color.hex("#0f172a");
+const surface = Color.hex("#f8fafc");
+const depth = Color.hex("#cbd5e1");
+const optimal = Color.hex("#10b981");
+/// Maps defines no risky colour: the shared signal colour.
+const risky = Color.hex("#F0F054");
+const fatal = Color.hex("#ef4444");
+/// apps.js defines no prime for Maps; the brand is the accent until the owner adds one.
+const prime = accent;
+
+/// `oklch(from C clamp(lo, 1 - l*l, hi) c*k h)`, with k = max(floor, 1 - l*slope).
+fn darkOf(x: Color, lo: f32, hi: f32, floor: f32, slope: f32) Color {
+    var o = x.toOklch();
+    const k = @max(floor, 1 - o.l * slope);
+    o.l = std.math.clamp(1 - o.l * o.l, lo, hi);
+    o.c *= k;
+    return o.toColor();
+}
+
+/// Base or core, whichever is further from `bg` in OKLCH lightness.
+fn readableOn(bg: Color, b: Color, k: Color) Color {
+    const l = bg.toOklch().l;
+    return if (@abs(b.toOklch().l - l) >= @abs(k.toOklch().l - l)) b else k;
+}
+
+const Theme = struct {
+    page: Color,
+    card: Color,
+    ink: Color,
+    ink_2: Color,
+    line: Color,
+    brand: Color,
+    brand_soft: Color,
+    danger: Color,
+    /// The snippet block: core as a dark well, with base text and the variant for the code.
+    code_bg: Color,
+    code_ink: Color,
+    key_bg: Color,
+    /// Maps' optimal (success) colour.
+    ok: Color,
+    on_brand: Color,
+    on_danger: Color,
+
+    fn of(dark: bool) Theme {
+        const b = if (dark) darkOf(base, 0.10, 0.25, 0.5, 0) else base;
+        const s = if (dark) darkOf(surface, 0.10, 0.25, 0.5, 0) else surface;
+        const k = if (dark) darkOf(core, 0.85, 0.95, 0.6, 0) else core;
+        const d = if (dark) darkOf(depth, 0.25, 0.40, 0.4, 0) else depth;
+        const a = if (dark) darkOf(accent, 0.45, 0.75, 0.70, 0.30) else accent;
+        const v = if (dark) darkOf(variant, 0.45, 0.75, 0.70, 0.30) else variant;
+        const o = if (dark) darkOf(optimal, 0.45, 0.80, 0.75, 0.25) else optimal;
+        const f = if (dark) darkOf(fatal, 0.45, 0.80, 0.75, 0.25) else fatal;
+        return .{
+            .page = b,
+            .card = s,
+            .ink = k,
+            .ink_2 = k.withAlpha(0.64),
+            .line = d.withAlpha(0.40),
+            .brand = a,
+            .brand_soft = a.withAlpha(0.12),
+            .danger = f,
+            // In light mode the well is core (dark) with base text; in dark mode core is light,
+            // so the well is the surface with ink text. The variant marks the code in light mode
+            // (it is the same colour as core, so it stands on the well only with alpha).
+            .code_bg = if (dark) s else k,
+            .code_ink = if (dark) v else b.withAlpha(0.92),
+            .key_bg = a.withAlpha(0.12),
+            .ok = o,
+            .on_brand = readableOn(a, b, k),
+            .on_danger = readableOn(f, b, k),
+        };
+    }
 };
+
+/// Set from `ui.env.dark` at the top of every frame.
+var c: Theme = undefined;
 
 const Mode = enum {
     full,
@@ -284,10 +356,13 @@ fn mask(arena: std.mem.Allocator, key: []const u8) []const u8 {
 // ---- View --------------------------------------------------------------------------------
 
 pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
+    c = Theme.of(ui.env.dark);
     ui.setBackground(c.page);
     ui.beginScroll(.{ .width = .fill, .height = .fill }, zui.key("page"));
     // Top bar.
-    ui.begin(.{ .direction = .row, .align_items = .center, .justify = .space_between, .padding = .xy(24, 14), .background = c.card, .border_width = 1, .border_color = c.line }, .{});
+    // Phones: the title may wrap; the buttons keep their one line (`button` never shrinks).
+    const phone = ui.env.width < 768;
+    ui.begin(.{ .direction = .row, .align_items = .center, .justify = .space_between, .gap = if (phone) 12 else 16, .padding = if (phone) .xy(16, 10) else .xy(24, 14), .background = c.card, .border_width = 1, .border_color = c.line }, .{});
     ui.text("Wufour Maps Platform", .{ .font_size = 18, .weight = 700, .color = c.ink });
     if (s.user) |name| {
         ui.begin(.{ .direction = .row, .gap = 12, .align_items = .center }, .{});
@@ -306,7 +381,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
 
     ui.begin(.{ .align_items = .center, .padding = .all(24) }, .{});
     ui.begin(.{ .width = .fill, .max_width = 900, .gap = 20 }, .{});
-    if (s.note) |n| ui.text(n, .{ .font_size = 14, .weight = 600, .color = if (s.note_bad) c.danger else Color.hex("#16a34a") });
+    if (s.note) |n| ui.text(n, .{ .font_size = 14, .weight = 500, .color = if (s.note_bad) c.danger else c.ok });
     if (s.tab == .credentials and s.user != null) credentials(s, ui) else docs(s, ui);
     ui.end();
     ui.end();
@@ -315,7 +390,7 @@ pub fn view(s: *const State, ui: *zui.Ui(Msg)) void {
 
 fn docs(s: *const State, ui: *zui.Ui(Msg)) void {
     ui.text("Maps Embed API", .{ .font_size = 32, .weight = 700, .color = c.ink });
-    ui.text("The Wufour Maps Embed API lets you place an interactive map, location picker, or real-time tracking interface on your website with a simple HTML iframe.", .{ .font_size = 15, .color = c.ink_2 });
+    ui.text("The Wufour Maps Embed API lets you place an interactive map, location picker, or real-time tracking interface on your website with a simple HTML iframe.", .{ .font_size = 16, .color = c.ink_2, .line_height = 1.5 });
     card(ui, "Live Sandbox", "Select a mode below to see how it looks and get the template code.");
     modeChooser(ui, s.sandbox_mode, .sandbox);
     code(ui, snippet(s, ui.arena(), s.sandbox_mode, "YOUR_API_KEY_HERE") catch "");
@@ -330,21 +405,21 @@ fn credentials(s: *const State, ui: *zui.Ui(Msg)) void {
     const narrow = ui.env.width < 600;
     card(ui, "Generate New Key", null);
     ui.begin(.{ .direction = if (narrow) .column else .row, .gap = 10, .align_items = if (narrow) .stretch else .center }, .{});
-    ui.begin(.{ .grow = 1, .padding = .xy(12, 0), .height = .{ .px = 44 }, .radius = 8, .border_width = 1, .border_color = c.line, .background = c.card, .justify = .center }, .{ .key = zui.key("name-row") });
-    ui.input(.{ .key = zui.key("name"), .value = s.name[0..s.name_len], .placeholder = "e.g., Turf Logistics Production", .on_change = onName, .on_submit = .create, .style = .{ .height = .{ .px = 42 }, .font_size = 15, .color = c.ink } });
+    ui.begin(.{ .grow = 1, .padding = .xy(12, 0), .height = .{ .px = 48 }, .radius = 12, .border_width = 1, .border_color = c.line, .background = c.card, .justify = .center }, .{ .key = zui.key("name-row") });
+    ui.input(.{ .key = zui.key("name"), .value = s.name[0..s.name_len], .placeholder = "e.g., Turf Logistics Production", .on_change = onName, .on_submit = .create, .style = .{ .height = .{ .px = 46 }, .font_size = 16, .color = c.ink } });
     ui.end();
     button(ui, "Create Key", .create, true);
     ui.end();
     ui.end();
 
     card(ui, "Active Keys", null);
-    if (s.keys_loaded and s.keys.items.len == 0) ui.text("No active keys found.", .{ .font_size = 15, .color = c.ink_2 });
+    if (s.keys_loaded and s.keys.items.len == 0) ui.text("No active keys found.", .{ .font_size = 16, .color = c.ink_2, .line_height = 1.5 });
     for (s.keys.items, 0..) |k, i| {
         ui.begin(.{ .direction = if (narrow) .column else .row, .align_items = if (narrow) .start else .center, .justify = .space_between, .gap = 12, .padding = .xy(0, 12), .border_width = 0 }, .{ .key = zui.key(k.key) });
         ui.begin(.{ .grow = if (narrow) 0 else 1, .gap = 4 }, .{});
-        ui.text(k.app_name, .{ .font_size = 15, .weight = 700, .color = c.ink });
+        ui.text(k.app_name, .{ .font_size = 16, .weight = 700, .color = c.ink });
         ui.begin(.{ .direction = .row }, .{});
-        ui.begin(.{ .padding = .xy(10, 6), .radius = 4, .background = c.key_bg }, .{});
+        ui.begin(.{ .padding = .xy(10, 6), .radius = 12, .background = c.key_bg }, .{});
         ui.text(mask(ui.arena(), k.key), .{ .font_size = 14, .mono = true, .color = c.brand });
         ui.end();
         ui.end();
@@ -371,7 +446,7 @@ fn credentials(s: *const State, ui: *zui.Ui(Msg)) void {
 
     card(ui, "Personalized Snippet Generator", "Configure your map mode below to generate the exact HTML iframe code with your API key.");
     if (s.keys.items.len > 0) {
-        ui.text("Key", .{ .font_size = 13, .weight = 600, .color = c.ink_2 });
+        ui.text("Key", .{ .font_size = 13, .weight = 500, .color = c.ink_2 });
         ui.begin(.{ .direction = .row, .gap = 6, .wrap = true }, .{});
         for (s.keys.items, 0..) |k, i| chip(ui, k.app_name, .{ .pick_key = i }, i == s.snippet_key, zui.key(i + 100));
         ui.end();
@@ -385,14 +460,14 @@ fn credentials(s: *const State, ui: *zui.Ui(Msg)) void {
 
 /// A white card with a title; the caller adds content and closes it with ui.end().
 fn card(ui: *zui.Ui(Msg), title: []const u8, desc: ?[]const u8) void {
-    ui.begin(.{ .padding = .all(24), .gap = 12, .radius = 12, .background = c.card, .border_width = 1, .border_color = c.line }, .{});
+    ui.begin(.{ .padding = .all(24), .gap = 12, .radius = 18, .background = c.card, .border_width = 1, .border_color = c.line }, .{});
     ui.text(title, .{ .font_size = 22, .weight = 700, .color = c.ink });
     if (desc) |d| ui.text(d, .{ .font_size = 14, .color = c.ink_2 });
 }
 
 fn modeChooser(ui: *zui.Ui(Msg), current: Mode, which: enum { sandbox, snippet }) void {
-    ui.text("Map Mode", .{ .font_size = 13, .weight = 600, .color = c.ink_2 });
-    ui.begin(.{ .direction = .row, .gap = 6, .wrap = true }, .{});
+    ui.text("Map Mode", .{ .font_size = 13, .weight = 500, .color = c.ink_2 });
+    ui.begin(.{ .direction = .row, .gap = chipGap(ui), .line_gap = chipGap(ui), .wrap = true }, .{});
     inline for (comptime std.enums.values(Mode)) |m| {
         const msg: Msg = if (which == .sandbox) .{ .sandbox_mode = m } else .{ .snippet_mode = m };
         chip(ui, m.label(), msg, current == m, zui.key(@as(u64, @intFromEnum(m)) + 10));
@@ -400,14 +475,21 @@ fn modeChooser(ui: *zui.Ui(Msg), current: Mode, which: enum { sandbox, snippet }
     ui.end();
 }
 
+/// Between chips: 12 points on phones (touch), 6 on a desktop as Maps-js had.
+fn chipGap(ui: *zui.Ui(Msg)) f32 {
+    return if (ui.env.width < 768) 12 else 6;
+}
+
 fn chip(ui: *zui.Ui(Msg), label: []const u8, msg: Msg, on: bool, k: u64) void {
-    ui.begin(.{ .padding = .xy(12, 8), .radius = 16, .background = if (on) c.brand_soft else c.page, .border_width = 1, .border_color = if (on) c.brand else c.line, .pressed_opacity = 0.8 }, .{ .on_press = msg, .key = k });
-    ui.text(label, .{ .font_size = 13, .weight = 600, .color = if (on) c.brand else c.ink_2 });
+    // A 44-point touch target on phones; the desktop keeps its compact chip.
+    const phone = ui.env.width < 768;
+    ui.begin(.{ .padding = .xy(12, 8), .min_height = if (phone) 44 else 0, .justify = .center, .radius = 12, .background = if (on) c.brand_soft else c.page, .border_width = 1, .border_color = if (on) c.brand else c.line, .pressed_opacity = 0.8 }, .{ .on_press = msg, .key = k });
+    ui.text(label, .{ .font_size = 13, .weight = 500, .color = if (on) c.brand else c.ink_2, .max_lines = 1 });
     ui.end();
 }
 
 fn code(ui: *zui.Ui(Msg), text: []const u8) void {
-    ui.begin(.{ .padding = .all(16), .radius = 8, .background = c.code_bg }, .{});
+    ui.begin(.{ .padding = .all(16), .radius = 12, .background = c.code_bg }, .{});
     ui.text(text, .{ .font_size = 13, .mono = true, .color = c.code_ink });
     ui.end();
 }
@@ -415,28 +497,32 @@ fn code(ui: *zui.Ui(Msg), text: []const u8) void {
 fn button(ui: *zui.Ui(Msg), label: []const u8, msg: Msg, primary: bool) void {
     ui.begin(.{
         .padding = .xy(20, 10),
-        .radius = 22,
+        // Never shrinks below its label (no two-line buttons in a tight bar), 44 points tall.
+        .min_width = @as(f32, @floatFromInt(label.len)) * 15 * 0.56 + 40,
+        .min_height = 44,
+        .radius = 12,
         .align_items = .center,
+        .justify = .center,
         .background = if (primary) c.brand else c.card,
         .border_width = if (primary) 0 else 1,
         .border_color = if (primary) c.brand else c.danger,
         .pressed_opacity = 0.85,
     }, .{ .on_press = msg });
-    ui.text(label, .{ .font_size = 14, .weight = 600, .color = if (primary) Color.white else c.danger });
+    ui.text(label, .{ .font_size = 15, .weight = 700, .color = if (primary) c.on_brand else c.danger, .max_lines = 1 });
     ui.end();
 }
 
 /// A tab with the blue bar under it when it is the open one (Maps-js's tab bar).
 fn dangerButton(ui: *zui.Ui(Msg), label: []const u8, msg: Msg) void {
-    ui.begin(.{ .padding = .xy(20, 10), .radius = 22, .align_items = .center, .background = c.danger, .pressed_opacity = 0.85 }, .{ .on_press = msg });
-    ui.text(label, .{ .font_size = 14, .weight = 600, .color = Color.white });
+    ui.begin(.{ .padding = .xy(20, 10), .radius = 12, .align_items = .center, .background = c.danger, .pressed_opacity = 0.85 }, .{ .on_press = msg });
+    ui.text(label, .{ .font_size = 15, .weight = 700, .color = c.on_danger });
     ui.end();
 }
 
 fn tabButton(ui: *zui.Ui(Msg), label: []const u8, msg: Msg, on: bool) void {
     ui.begin(.{ .pressed_opacity = 0.8 }, .{ .on_press = msg });
     ui.begin(.{ .padding = .xy(4, 16) }, .{});
-    ui.text(label, .{ .font_size = 15, .weight = 600, .color = if (on) c.brand else c.ink_2 });
+    ui.text(label, .{ .font_size = 16, .weight = 500, .color = if (on) c.brand else c.ink_2 });
     ui.end();
     ui.begin(.{ .height = .{ .px = 3 }, .background = if (on) c.brand else null }, .{});
     ui.end();

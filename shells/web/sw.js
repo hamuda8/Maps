@@ -5,7 +5,7 @@
 //   answer kept (capped) so a search or route seen before still shows offline.
 // - Pages: the map from the cache when offline; any other page gets the offline page.
 // - Other API calls (keys, tracking, sign-in), embeds' data and other sites' requests: never cached.
-const CACHE_NAME = 'wufour-maps-v16';
+const CACHE_NAME = 'wufour-maps-v17';
 const TILE_CACHE = 'wufour-tiles-v2';
 const API_CACHE = 'wufour-api-v1';
 const MAX_TILES = 1500; // ~15-30 MB of raster tiles
@@ -20,6 +20,12 @@ const ASSETS_TO_CACHE = [
     '/app.wasm',
     '/assets/images/icon.svg',
     '/assets/images/icons/icon-192.png',
+    '/fonts/WufourSansGolden-Regular.woff2',
+    '/fonts/WufourSansGolden-Medium.woff2',
+    '/fonts/WufourSansGolden-Bold.woff2',
+    '/fonts/WufourArabicGolden-Regular.woff2',
+    '/fonts/WufourArabicGolden-Medium.woff2',
+    '/fonts/WufourArabicGolden-Bold.woff2',
 ];
 
 // Read-only lookups the map makes (GET, no API key, same answer for the same question).
